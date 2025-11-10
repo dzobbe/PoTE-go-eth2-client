@@ -31,6 +31,12 @@ func (b *BeaconBlockHeader) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	// Field (4) 'BodyRoot'
 	dst = append(dst, b.BodyRoot[:]...)
 
+	// Field (5) 'ProposerTEEType'
+	dst = append(dst, byte(b.ProposerTEEType))
+
+	// Field (6) 'ProposerTEEQuote'
+	dst = append(dst, b.ProposerTEEQuote[:]...)
+
 	return
 }
 
@@ -38,31 +44,47 @@ func (b *BeaconBlockHeader) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 func (b *BeaconBlockHeader) UnmarshalSSZ(buf []byte) error {
 	var err error
 	size := uint64(len(buf))
-	if size != 112 {
+	switch size {
+	case 112:
+		// Legacy header without TEE fields.
+		b.Slot = Slot(ssz.UnmarshallUint64(buf[0:8]))
+		b.ProposerIndex = ValidatorIndex(ssz.UnmarshallUint64(buf[8:16]))
+		copy(b.ParentRoot[:], buf[16:48])
+		copy(b.StateRoot[:], buf[48:80])
+		copy(b.BodyRoot[:], buf[80:112])
+		b.ProposerTEEType = 0
+		b.ProposerTEEQuote = [ProposerTEEQuoteLength]byte{}
+	case 112 + 1 + ProposerTEEQuoteLength:
+		// Field (0) 'Slot'
+		b.Slot = Slot(ssz.UnmarshallUint64(buf[0:8]))
+
+		// Field (1) 'ProposerIndex'
+		b.ProposerIndex = ValidatorIndex(ssz.UnmarshallUint64(buf[8:16]))
+
+		// Field (2) 'ParentRoot'
+		copy(b.ParentRoot[:], buf[16:48])
+
+		// Field (3) 'StateRoot'
+		copy(b.StateRoot[:], buf[48:80])
+
+		// Field (4) 'BodyRoot'
+		copy(b.BodyRoot[:], buf[80:112])
+
+		// Field (5) 'ProposerTEEType'
+		b.ProposerTEEType = uint8(buf[112])
+
+		// Field (6) 'ProposerTEEQuote'
+		copy(b.ProposerTEEQuote[:], buf[113:])
+	default:
 		return ssz.ErrSize
 	}
-
-	// Field (0) 'Slot'
-	b.Slot = Slot(ssz.UnmarshallUint64(buf[0:8]))
-
-	// Field (1) 'ProposerIndex'
-	b.ProposerIndex = ValidatorIndex(ssz.UnmarshallUint64(buf[8:16]))
-
-	// Field (2) 'ParentRoot'
-	copy(b.ParentRoot[:], buf[16:48])
-
-	// Field (3) 'StateRoot'
-	copy(b.StateRoot[:], buf[48:80])
-
-	// Field (4) 'BodyRoot'
-	copy(b.BodyRoot[:], buf[80:112])
 
 	return err
 }
 
 // SizeSSZ returns the ssz encoded size in bytes for the BeaconBlockHeader object
 func (b *BeaconBlockHeader) SizeSSZ() (size int) {
-	size = 112
+	size = 112 + 1 + ProposerTEEQuoteLength
 	return
 }
 
@@ -89,6 +111,12 @@ func (b *BeaconBlockHeader) HashTreeRootWith(hh ssz.HashWalker) (err error) {
 
 	// Field (4) 'BodyRoot'
 	hh.PutBytes(b.BodyRoot[:])
+
+	// Field (5) 'ProposerTEEType'
+	hh.PutUint64(uint64(b.ProposerTEEType))
+
+	// Field (6) 'ProposerTEEQuote'
+	hh.PutBytes(b.ProposerTEEQuote[:])
 
 	hh.Merkleize(indx)
 	return

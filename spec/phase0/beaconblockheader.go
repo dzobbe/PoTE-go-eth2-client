@@ -25,42 +25,60 @@ import (
 	"github.com/pkg/errors"
 )
 
+const (
+	// ProposerTEEQuoteLength is the fixed size of the proposer TEE attestation.
+	ProposerTEEQuoteLength = 8192
+)
+
 // BeaconBlockHeader represents the header of a beacon block without its content.
 type BeaconBlockHeader struct {
-	Slot          Slot
-	ProposerIndex ValidatorIndex
-	ParentRoot    Root `ssz-size:"32"`
-	StateRoot     Root `ssz-size:"32"`
-	BodyRoot      Root `ssz-size:"32"`
+	Slot             Slot
+	ProposerIndex    ValidatorIndex
+	ParentRoot       Root `ssz-size:"32"`
+	StateRoot        Root `ssz-size:"32"`
+	BodyRoot         Root `ssz-size:"32"`
+	ProposerTEEType  uint8
+	ProposerTEEQuote [ProposerTEEQuoteLength]byte `ssz-size:"8192"`
 }
 
 // beaconBlockHeaderJSON is a raw representation of the struct.
 type beaconBlockHeaderJSON struct {
-	Slot          string `json:"slot"`
-	ProposerIndex string `json:"proposer_index"`
-	ParentRoot    string `json:"parent_root"`
-	StateRoot     string `json:"state_root"`
-	BodyRoot      string `json:"body_root"`
+	Slot             string `json:"slot"`
+	ProposerIndex    string `json:"proposer_index"`
+	ParentRoot       string `json:"parent_root"`
+	StateRoot        string `json:"state_root"`
+	BodyRoot         string `json:"body_root"`
+	ProposerTEEType  string `json:"proposer_tee_type,omitempty"`
+	ProposerTEEQuote string `json:"proposer_tee_quote,omitempty"`
 }
 
 // beaconBlockHeaderYAML is a raw representation of the struct.
 type beaconBlockHeaderYAML struct {
-	Slot          uint64 `yaml:"slot"`
-	ProposerIndex uint64 `yaml:"proposer_index"`
-	ParentRoot    string `yaml:"parent_root"`
-	StateRoot     string `yaml:"state_root"`
-	BodyRoot      string `yaml:"body_root"`
+	Slot             uint64 `yaml:"slot"`
+	ProposerIndex    uint64 `yaml:"proposer_index"`
+	ParentRoot       string `yaml:"parent_root"`
+	StateRoot        string `yaml:"state_root"`
+	BodyRoot         string `yaml:"body_root"`
+	ProposerTEEType  *uint8 `yaml:"proposer_tee_type,omitempty"`
+	ProposerTEEQuote string `yaml:"proposer_tee_quote,omitempty"`
 }
 
 // MarshalJSON implements json.Marshaler.
 func (b *BeaconBlockHeader) MarshalJSON() ([]byte, error) {
-	return json.Marshal(&beaconBlockHeaderJSON{
+	beaconBlockHeaderJSON := &beaconBlockHeaderJSON{
 		Slot:          fmt.Sprintf("%d", b.Slot),
 		ProposerIndex: fmt.Sprintf("%d", b.ProposerIndex),
 		ParentRoot:    fmt.Sprintf("%#x", b.ParentRoot),
 		StateRoot:     fmt.Sprintf("%#x", b.StateRoot),
 		BodyRoot:      fmt.Sprintf("%#x", b.BodyRoot),
-	})
+	}
+
+	if b.ProposerTEEType != 0 || !isZeroTEEQuote(b.ProposerTEEQuote) {
+		beaconBlockHeaderJSON.ProposerTEEType = fmt.Sprintf("%d", b.ProposerTEEType)
+		beaconBlockHeaderJSON.ProposerTEEQuote = fmt.Sprintf("%#x", b.ProposerTEEQuote[:])
+	}
+
+	return json.Marshal(beaconBlockHeaderJSON)
 }
 
 // UnmarshalJSON implements json.Unmarshaler.
@@ -124,18 +142,49 @@ func (b *BeaconBlockHeader) unpack(beaconBlockHeaderJSON *beaconBlockHeaderJSON)
 	}
 	copy(b.BodyRoot[:], bodyRoot)
 
+	if beaconBlockHeaderJSON.ProposerTEEType != "" {
+		teeType, err := strconv.ParseUint(beaconBlockHeaderJSON.ProposerTEEType, 10, 8)
+		if err != nil {
+			return errors.Wrap(err, "invalid value for proposer tee type")
+		}
+		b.ProposerTEEType = uint8(teeType)
+	} else {
+		b.ProposerTEEType = 0
+	}
+
+	if beaconBlockHeaderJSON.ProposerTEEQuote != "" {
+		proposerTEEQuote, err := hex.DecodeString(strings.TrimPrefix(beaconBlockHeaderJSON.ProposerTEEQuote, "0x"))
+		if err != nil {
+			return errors.Wrap(err, "invalid value for proposer tee quote")
+		}
+		if len(proposerTEEQuote) != ProposerTEEQuoteLength {
+			return errors.New("incorrect length for proposer tee quote")
+		}
+		copy(b.ProposerTEEQuote[:], proposerTEEQuote)
+	} else {
+		b.ProposerTEEQuote = [ProposerTEEQuoteLength]byte{}
+	}
+
 	return nil
 }
 
 // MarshalYAML implements yaml.Marshaler.
 func (b *BeaconBlockHeader) MarshalYAML() ([]byte, error) {
-	yamlBytes, err := yaml.MarshalWithOptions(&beaconBlockHeaderYAML{
+	beaconBlockHeaderYAML := &beaconBlockHeaderYAML{
 		Slot:          uint64(b.Slot),
 		ProposerIndex: uint64(b.ProposerIndex),
 		ParentRoot:    fmt.Sprintf("%#x", b.ParentRoot),
 		StateRoot:     fmt.Sprintf("%#x", b.StateRoot),
 		BodyRoot:      fmt.Sprintf("%#x", b.BodyRoot),
-	}, yaml.Flow(true))
+	}
+
+	if b.ProposerTEEType != 0 || !isZeroTEEQuote(b.ProposerTEEQuote) {
+		teeType := b.ProposerTEEType
+		beaconBlockHeaderYAML.ProposerTEEType = &teeType
+		beaconBlockHeaderYAML.ProposerTEEQuote = fmt.Sprintf("%#x", b.ProposerTEEQuote[:])
+	}
+
+	yamlBytes, err := yaml.MarshalWithOptions(beaconBlockHeaderYAML, yaml.Flow(true))
 	if err != nil {
 		return nil, err
 	}
@@ -162,4 +211,14 @@ func (b *BeaconBlockHeader) String() string {
 	}
 
 	return string(data)
+}
+
+func isZeroTEEQuote(quote [ProposerTEEQuoteLength]byte) bool {
+	for _, b := range quote {
+		if b != 0 {
+			return false
+		}
+	}
+
+	return true
 }

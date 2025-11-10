@@ -16,6 +16,8 @@ package phase0_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/attestantio/go-eth2-client/spec/phase0"
@@ -166,6 +168,34 @@ func TestBeaconBlockHeaderJSON(t *testing.T) {
 	}
 }
 
+func TestBeaconBlockHeaderJSONTEE(t *testing.T) {
+	teeQuote := "0x" + strings.Repeat("00", phase0.ProposerTEEQuoteLength)
+	input := []byte(fmt.Sprintf(`{"slot":"1","proposer_index":"2","parent_root":"0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f","state_root":"0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f","body_root":"0x404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f","proposer_tee_type":"1","proposer_tee_quote":"%s"}`, teeQuote))
+
+	var res phase0.BeaconBlockHeader
+	require.NoError(t, json.Unmarshal(input, &res))
+	assert.Equal(t, uint8(1), res.ProposerTEEType)
+	assert.Equal(t, phase0.ProposerTEEQuoteLength, len(res.ProposerTEEQuote))
+
+	rt, err := json.Marshal(&res)
+	require.NoError(t, err)
+	assert.Equal(t, string(input), string(rt))
+}
+
+func TestBeaconBlockHeaderJSONTEEQuoteShort(t *testing.T) {
+	input := []byte(`{"slot":"1","proposer_index":"2","parent_root":"0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f","state_root":"0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f","body_root":"0x404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f","proposer_tee_quote":"0x00"}`)
+	var res phase0.BeaconBlockHeader
+	err := json.Unmarshal(input, &res)
+	require.EqualError(t, err, "incorrect length for proposer tee quote")
+}
+
+func TestBeaconBlockHeaderJSONTEETypeInvalid(t *testing.T) {
+	input := []byte(`{"slot":"1","proposer_index":"2","parent_root":"0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f","state_root":"0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f","body_root":"0x404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f","proposer_tee_type":"-1"}`)
+	var res phase0.BeaconBlockHeader
+	err := json.Unmarshal(input, &res)
+	require.EqualError(t, err, "invalid value for proposer tee type: strconv.ParseUint: parsing \"-1\": invalid syntax")
+}
+
 func TestBeaconBlockHeaderYAML(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -195,4 +225,19 @@ func TestBeaconBlockHeaderYAML(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBeaconBlockHeaderYAMLTEE(t *testing.T) {
+	teeQuote := "0x" + strings.Repeat("00", phase0.ProposerTEEQuoteLength)
+	input := []byte(fmt.Sprintf(`{slot: 1, proposer_index: 2, parent_root: '0x000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f', state_root: '0x202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f', body_root: '0x404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f', proposer_tee_type: 1, proposer_tee_quote: '%s'}`, teeQuote))
+
+	var res phase0.BeaconBlockHeader
+	require.NoError(t, yaml.Unmarshal(input, &res))
+	assert.Equal(t, uint8(1), res.ProposerTEEType)
+
+	rt, err := yaml.Marshal(&res)
+	require.NoError(t, err)
+	assert.Equal(t, string(rt), res.String())
+	rt = bytes.TrimSuffix(rt, []byte("\n"))
+	assert.Equal(t, string(input), string(rt))
 }
