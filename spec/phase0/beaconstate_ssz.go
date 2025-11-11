@@ -490,7 +490,12 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 // SizeSSZ returns the ssz encoded size in bytes for the BeaconState object
 func (b *BeaconState) SizeSSZ() (size int) {
-	size = 2687377
+	size = 2687377 - LegacyBeaconBlockHeaderSize
+
+	if b.LatestBlockHeader == nil {
+		b.LatestBlockHeader = new(BeaconBlockHeader)
+	}
+	size += b.LatestBlockHeader.SizeSSZ()
 
 	// Field (7) 'HistoricalRoots'
 	size += len(b.HistoricalRoots) * 32

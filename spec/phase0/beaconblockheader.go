@@ -26,6 +26,8 @@ import (
 )
 
 const (
+	// LegacyBeaconBlockHeaderSize is the SSZ size of a beacon block header prior to the TEE extensions.
+	LegacyBeaconBlockHeaderSize = 112
 	// ProposerTEEQuoteLength is the fixed size of the proposer TEE attestation.
 	ProposerTEEQuoteLength = 8192
 )
