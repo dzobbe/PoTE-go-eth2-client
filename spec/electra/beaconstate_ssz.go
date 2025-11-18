@@ -19,7 +19,6 @@ func (b *BeaconState) MarshalSSZ() ([]byte, error) {
 // MarshalSSZTo ssz marshals the BeaconState object to a target array
 func (b *BeaconState) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	dst = buf
-	offset := int(2736713)
 
 	// Field (0) 'GenesisTime'
 	dst = ssz.MarshalUint64(dst, b.GenesisTime)
@@ -63,6 +62,15 @@ func (b *BeaconState) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	for ii := 0; ii < 8192; ii++ {
 		dst = append(dst, b.StateRoots[ii][:]...)
 	}
+
+	// Calculate offset dynamically based on actual header size
+	// Offset points to where variable-length data starts (after all fixed-length fields)
+	// Fixed portion: genesis_time(8) + genesis_validators_root(32) + slot(8) + fork(16) + header(variable) + BlockRoots(8192*32) + StateRoots(8192*32)
+	fixedPortionSize := 8 + 32 + 8 + 16 // genesis_time + genesis_validators_root + slot + fork
+	fixedPortionSize += b.LatestBlockHeader.SizeSSZ() // Actual header size (8305 for TEE, 112 for legacy)
+	fixedPortionSize += 8192 * 32 // BlockRoots
+	fixedPortionSize += 8192 * 32 // StateRoots
+	offset := int(fixedPortionSize)
 
 	// Offset (7) 'HistoricalRoots'
 	dst = ssz.WriteOffset(dst, offset)
