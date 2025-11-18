@@ -64,13 +64,47 @@ func (b *BeaconState) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	}
 
 	// Calculate offset dynamically based on actual header size
-	// Offset points to where variable-length data starts (after all fixed-length fields)
-	// Fixed portion: genesis_time(8) + genesis_validators_root(32) + slot(8) + fork(16) + header(variable) + BlockRoots(8192*32) + StateRoots(8192*32)
-	fixedPortionSize := 8 + 32 + 8 + 16 // genesis_time + genesis_validators_root + slot + fork
-	fixedPortionSize += b.LatestBlockHeader.SizeSSZ() // Actual header size (8305 for TEE, 112 for legacy)
-	fixedPortionSize += 8192 * 32 // BlockRoots
-	fixedPortionSize += 8192 * 32 // StateRoots
-	offset := int(fixedPortionSize)
+	// Offset points to where variable-length data starts (after ALL fixed-length fields)
+	// First, calculate size up to where offsets are written:
+	// genesis_time(8) + genesis_validators_root(32) + slot(8) + fork(16) + header(variable) + BlockRoots(8192*32) + StateRoots(8192*32)
+	fixedPortionBeforeOffsets := 8 + 32 + 8 + 16 // genesis_time + genesis_validators_root + slot + fork
+	fixedPortionBeforeOffsets += b.LatestBlockHeader.SizeSSZ() // Actual header size (8305 for TEE, 112 for legacy)
+	fixedPortionBeforeOffsets += 8192 * 32 // BlockRoots
+	fixedPortionBeforeOffsets += 8192 * 32 // StateRoots
+	
+	// Now calculate size of offsets section (one offset per variable-length field)
+	// Offsets for: HistoricalRoots, ETH1DataVotes, Validators, Balances, PreviousEpochParticipation, CurrentEpochParticipation, InactivityScores, LatestExecutionPayloadHeader, HistoricalSummaries, PendingDeposits, PendingPartialWithdrawals, PendingConsolidations
+	numOffsets := 12
+	offsetsSize := numOffsets * 4 // Each offset is 4 bytes
+	
+	// Calculate size of fixed fields that come AFTER offsets:
+	// ETH1Data(72) + ETH1DepositIndex(8) + RANDAOMixes(65536*32) + Slashings(8192*8) + JustificationBits(1) + 
+	// PreviousJustifiedCheckpoint(40) + CurrentJustifiedCheckpoint(40) + FinalizedCheckpoint(40) +
+	// CurrentSyncCommittee(24624) + NextSyncCommittee(24624) + NextWithdrawalIndex(8) + NextWithdrawalValidatorIndex(8) +
+	// DepositRequestsStartIndex(8) + DepositBalanceToConsume(8) + ExitBalanceToConsume(8) + EarliestExitEpoch(8) +
+	// ConsolidationBalanceToConsume(8) + EarliestConsolidationEpoch(8)
+	fixedPortionAfterOffsets := 72 // ETH1Data
+	fixedPortionAfterOffsets += 8 // ETH1DepositIndex
+	fixedPortionAfterOffsets += 65536 * 32 // RANDAOMixes
+	fixedPortionAfterOffsets += 8192 * 8 // Slashings
+	fixedPortionAfterOffsets += 1 // JustificationBits
+	fixedPortionAfterOffsets += 40 // PreviousJustifiedCheckpoint
+	fixedPortionAfterOffsets += 40 // CurrentJustifiedCheckpoint
+	fixedPortionAfterOffsets += 40 // FinalizedCheckpoint
+	fixedPortionAfterOffsets += 24624 // CurrentSyncCommittee
+	fixedPortionAfterOffsets += 24624 // NextSyncCommittee
+	fixedPortionAfterOffsets += 8 // NextWithdrawalIndex
+	fixedPortionAfterOffsets += 8 // NextWithdrawalValidatorIndex
+	fixedPortionAfterOffsets += 8 // DepositRequestsStartIndex
+	fixedPortionAfterOffsets += 8 // DepositBalanceToConsume
+	fixedPortionAfterOffsets += 8 // ExitBalanceToConsume
+	fixedPortionAfterOffsets += 8 // EarliestExitEpoch
+	fixedPortionAfterOffsets += 8 // ConsolidationBalanceToConsume
+	fixedPortionAfterOffsets += 8 // EarliestConsolidationEpoch
+	
+	// Total fixed portion size = before offsets + offsets + after offsets
+	totalFixedPortionSize := fixedPortionBeforeOffsets + offsetsSize + fixedPortionAfterOffsets
+	offset := int(totalFixedPortionSize)
 
 	// Offset (7) 'HistoricalRoots'
 	dst = ssz.WriteOffset(dst, offset)
