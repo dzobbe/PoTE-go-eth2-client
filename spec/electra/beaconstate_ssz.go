@@ -6,8 +6,8 @@ package electra
 import (
 	"github.com/attestantio/go-eth2-client/spec/altair"
 	"github.com/attestantio/go-eth2-client/spec/capella"
-	"github.com/attestantio/go-eth2-client/spec/phase0"
 	"github.com/attestantio/go-eth2-client/spec/deneb"
+	"github.com/attestantio/go-eth2-client/spec/phase0"
 	ssz "github.com/ferranbt/fastssz"
 )
 
@@ -67,41 +67,41 @@ func (b *BeaconState) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	// Offset points to where variable-length data starts (after ALL fixed-length fields)
 	// First, calculate size up to where offsets are written:
 	// genesis_time(8) + genesis_validators_root(32) + slot(8) + fork(16) + header(variable) + BlockRoots(8192*32) + StateRoots(8192*32)
-	fixedPortionBeforeOffsets := 8 + 32 + 8 + 16 // genesis_time + genesis_validators_root + slot + fork
+	fixedPortionBeforeOffsets := 8 + 32 + 8 + 16               // genesis_time + genesis_validators_root + slot + fork
 	fixedPortionBeforeOffsets += b.LatestBlockHeader.SizeSSZ() // Actual header size (8305 for TEE, 112 for legacy)
-	fixedPortionBeforeOffsets += 8192 * 32 // BlockRoots
-	fixedPortionBeforeOffsets += 8192 * 32 // StateRoots
-	
+	fixedPortionBeforeOffsets += 8192 * 32                     // BlockRoots
+	fixedPortionBeforeOffsets += 8192 * 32                     // StateRoots
+
 	// Now calculate size of offsets section (one offset per variable-length field)
 	// Offsets for: HistoricalRoots, ETH1DataVotes, Validators, Balances, PreviousEpochParticipation, CurrentEpochParticipation, InactivityScores, LatestExecutionPayloadHeader, HistoricalSummaries, PendingDeposits, PendingPartialWithdrawals, PendingConsolidations
 	numOffsets := 12
 	offsetsSize := numOffsets * 4 // Each offset is 4 bytes
-	
+
 	// Calculate size of fixed fields that come AFTER offsets:
-	// ETH1Data(72) + ETH1DepositIndex(8) + RANDAOMixes(65536*32) + Slashings(8192*8) + JustificationBits(1) + 
+	// ETH1Data(72) + ETH1DepositIndex(8) + RANDAOMixes(65536*32) + Slashings(8192*8) + JustificationBits(1) +
 	// PreviousJustifiedCheckpoint(40) + CurrentJustifiedCheckpoint(40) + FinalizedCheckpoint(40) +
 	// CurrentSyncCommittee(24624) + NextSyncCommittee(24624) + NextWithdrawalIndex(8) + NextWithdrawalValidatorIndex(8) +
 	// DepositRequestsStartIndex(8) + DepositBalanceToConsume(8) + ExitBalanceToConsume(8) + EarliestExitEpoch(8) +
 	// ConsolidationBalanceToConsume(8) + EarliestConsolidationEpoch(8)
-	fixedPortionAfterOffsets := 72 // ETH1Data
-	fixedPortionAfterOffsets += 8 // ETH1DepositIndex
+	fixedPortionAfterOffsets := 72         // ETH1Data
+	fixedPortionAfterOffsets += 8          // ETH1DepositIndex
 	fixedPortionAfterOffsets += 65536 * 32 // RANDAOMixes
-	fixedPortionAfterOffsets += 8192 * 8 // Slashings
-	fixedPortionAfterOffsets += 1 // JustificationBits
-	fixedPortionAfterOffsets += 40 // PreviousJustifiedCheckpoint
-	fixedPortionAfterOffsets += 40 // CurrentJustifiedCheckpoint
-	fixedPortionAfterOffsets += 40 // FinalizedCheckpoint
-	fixedPortionAfterOffsets += 24624 // CurrentSyncCommittee
-	fixedPortionAfterOffsets += 24624 // NextSyncCommittee
-	fixedPortionAfterOffsets += 8 // NextWithdrawalIndex
-	fixedPortionAfterOffsets += 8 // NextWithdrawalValidatorIndex
-	fixedPortionAfterOffsets += 8 // DepositRequestsStartIndex
-	fixedPortionAfterOffsets += 8 // DepositBalanceToConsume
-	fixedPortionAfterOffsets += 8 // ExitBalanceToConsume
-	fixedPortionAfterOffsets += 8 // EarliestExitEpoch
-	fixedPortionAfterOffsets += 8 // ConsolidationBalanceToConsume
-	fixedPortionAfterOffsets += 8 // EarliestConsolidationEpoch
-	
+	fixedPortionAfterOffsets += 8192 * 8   // Slashings
+	fixedPortionAfterOffsets += 1          // JustificationBits
+	fixedPortionAfterOffsets += 40         // PreviousJustifiedCheckpoint
+	fixedPortionAfterOffsets += 40         // CurrentJustifiedCheckpoint
+	fixedPortionAfterOffsets += 40         // FinalizedCheckpoint
+	fixedPortionAfterOffsets += 24624      // CurrentSyncCommittee
+	fixedPortionAfterOffsets += 24624      // NextSyncCommittee
+	fixedPortionAfterOffsets += 8          // NextWithdrawalIndex
+	fixedPortionAfterOffsets += 8          // NextWithdrawalValidatorIndex
+	fixedPortionAfterOffsets += 8          // DepositRequestsStartIndex
+	fixedPortionAfterOffsets += 8          // DepositBalanceToConsume
+	fixedPortionAfterOffsets += 8          // ExitBalanceToConsume
+	fixedPortionAfterOffsets += 8          // EarliestExitEpoch
+	fixedPortionAfterOffsets += 8          // ConsolidationBalanceToConsume
+	fixedPortionAfterOffsets += 8          // EarliestConsolidationEpoch
+
 	// Total fixed portion size = before offsets + offsets + after offsets
 	totalFixedPortionSize := fixedPortionBeforeOffsets + offsetsSize + fixedPortionAfterOffsets
 	offset := int(totalFixedPortionSize)
@@ -408,176 +408,250 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	if b.LatestBlockHeader == nil {
 		b.LatestBlockHeader = new(phase0.BeaconBlockHeader)
 	}
-	if err = b.LatestBlockHeader.UnmarshalSSZ(buf[64:176]); err != nil {
-		return err
+
+	// Detect header size: try extended header first (8305 bytes), fallback to legacy (112 bytes)
+	headerStart := 64
+	extendedHeaderSize := 112 + 1 + phase0.ProposerTEEQuoteLength // Extended header size (8305)
+	legacyHeaderSize := 112
+
+	var headerSize int
+	if headerStart+extendedHeaderSize <= len(buf) {
+		// Try to unmarshal with extended size to see if it's valid
+		tempHeader := &phase0.BeaconBlockHeader{}
+		// Create a slice of exactly the right size for the header
+		headerBuf := make([]byte, extendedHeaderSize)
+		copy(headerBuf, buf[headerStart:headerStart+extendedHeaderSize])
+		if err = tempHeader.UnmarshalSSZ(headerBuf); err == nil {
+			// Extended header worked
+			headerSize = extendedHeaderSize
+			b.LatestBlockHeader = tempHeader
+		} else {
+			// Fallback to legacy size
+			headerSize = legacyHeaderSize
+		}
+	} else {
+		headerSize = legacyHeaderSize
 	}
 
+	// If we haven't unmarshaled yet (legacy case), do it now
+	if headerSize == legacyHeaderSize {
+		headerBuf := make([]byte, legacyHeaderSize)
+		copy(headerBuf, buf[headerStart:headerStart+legacyHeaderSize])
+		if err = b.LatestBlockHeader.UnmarshalSSZ(headerBuf); err != nil {
+			return err
+		}
+	}
+
+	headerEnd := headerStart + headerSize
+	headerSizeDiff := headerSize - legacyHeaderSize // Difference from legacy size
+
 	// Field (5) 'BlockRoots'
+	blockRootsStart := headerEnd
+	blockRootsEnd := blockRootsStart + 8192*32
 	b.BlockRoots = make([]phase0.Root, 8192)
 	for ii := 0; ii < 8192; ii++ {
-		copy(b.BlockRoots[ii][:], buf[176:262320][ii*32:(ii+1)*32])
+		copy(b.BlockRoots[ii][:], buf[blockRootsStart:blockRootsEnd][ii*32:(ii+1)*32])
 	}
 
 	// Field (6) 'StateRoots'
+	stateRootsStart := blockRootsEnd
+	stateRootsEnd := stateRootsStart + 8192*32
 	b.StateRoots = make([]phase0.Root, 8192)
 	for ii := 0; ii < 8192; ii++ {
-		copy(b.StateRoots[ii][:], buf[262320:524464][ii*32:(ii+1)*32])
+		copy(b.StateRoots[ii][:], buf[stateRootsStart:stateRootsEnd][ii*32:(ii+1)*32])
 	}
 
 	// Offset (7) 'HistoricalRoots'
-	if o7 = ssz.ReadOffset(buf[524464:524468]); o7 > size {
+	// Offset section starts after StateRoots
+	offsetsStart := stateRootsEnd
+	if o7 = ssz.ReadOffset(buf[offsetsStart : offsetsStart+4]); o7 > size {
 		return ssz.ErrOffset
 	}
 
-	if o7 < 2736713 {
+	if o7 < 2736713+uint64(headerSizeDiff) {
 		return ssz.ErrInvalidVariableOffset
 	}
 
 	// Field (8) 'ETH1Data'
+	// ETH1Data starts after 12 offsets (48 bytes)
+	eth1DataStart := offsetsStart + 12*4
+	eth1DataEnd := eth1DataStart + 72
 	if b.ETH1Data == nil {
 		b.ETH1Data = new(phase0.ETH1Data)
 	}
-	if err = b.ETH1Data.UnmarshalSSZ(buf[524468:524540]); err != nil {
+	if err = b.ETH1Data.UnmarshalSSZ(buf[eth1DataStart:eth1DataEnd]); err != nil {
 		return err
 	}
 
 	// Offset (9) 'ETH1DataVotes'
-	if o9 = ssz.ReadOffset(buf[524540:524544]); o9 > size || o7 > o9 {
+	eth1DataVotesOffsetStart := eth1DataEnd
+	if o9 = ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4]); o9 > size || o7 > o9 {
 		return ssz.ErrOffset
 	}
 
 	// Field (10) 'ETH1DepositIndex'
-	b.ETH1DepositIndex = ssz.UnmarshallUint64(buf[524544:524552])
+	eth1DepositIndexStart := eth1DataVotesOffsetStart + 4
+	b.ETH1DepositIndex = ssz.UnmarshallUint64(buf[eth1DepositIndexStart : eth1DepositIndexStart+8])
 
 	// Offset (11) 'Validators'
-	if o11 = ssz.ReadOffset(buf[524552:524556]); o11 > size || o9 > o11 {
+	validatorsOffsetStart := eth1DepositIndexStart + 8
+	if o11 = ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4]); o11 > size || o9 > o11 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (12) 'Balances'
-	if o12 = ssz.ReadOffset(buf[524556:524560]); o12 > size || o11 > o12 {
+	balancesOffsetStart := validatorsOffsetStart + 4
+	if o12 = ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4]); o12 > size || o11 > o12 {
 		return ssz.ErrOffset
 	}
 
 	// Field (13) 'RANDAOMixes'
+	randaoMixesStart := balancesOffsetStart + 4
+	randaoMixesEnd := randaoMixesStart + 65536*32
 	b.RANDAOMixes = make([]phase0.Root, 65536)
 	for ii := 0; ii < 65536; ii++ {
-		copy(b.RANDAOMixes[ii][:], buf[524560:2621712][ii*32:(ii+1)*32])
+		copy(b.RANDAOMixes[ii][:], buf[randaoMixesStart:randaoMixesEnd][ii*32:(ii+1)*32])
 	}
 
 	// Field (14) 'Slashings'
+	slashingsStart := randaoMixesEnd
+	slashingsEnd := slashingsStart + 8192*8
 	b.Slashings = make([]phase0.Gwei, 8192)
 	for ii := 0; ii < 8192; ii++ {
-		b.Slashings[ii] = phase0.Gwei(ssz.UnmarshallUint64(buf[2621712:2687248][ii*8 : (ii+1)*8]))
+		b.Slashings[ii] = phase0.Gwei(ssz.UnmarshallUint64(buf[slashingsStart:slashingsEnd][ii*8 : (ii+1)*8]))
 	}
 
 	// Offset (15) 'PreviousEpochParticipation'
-	if o15 = ssz.ReadOffset(buf[2687248:2687252]); o15 > size || o12 > o15 {
+	prevEpochPartOffsetStart := slashingsEnd
+	if o15 = ssz.ReadOffset(buf[prevEpochPartOffsetStart : prevEpochPartOffsetStart+4]); o15 > size || o12 > o15 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (16) 'CurrentEpochParticipation'
-	if o16 = ssz.ReadOffset(buf[2687252:2687256]); o16 > size || o15 > o16 {
+	currEpochPartOffsetStart := prevEpochPartOffsetStart + 4
+	if o16 = ssz.ReadOffset(buf[currEpochPartOffsetStart : currEpochPartOffsetStart+4]); o16 > size || o15 > o16 {
 		return ssz.ErrOffset
 	}
 
 	// Field (17) 'JustificationBits'
+	justificationBitsStart := currEpochPartOffsetStart + 4
 	if cap(b.JustificationBits) == 0 {
-		b.JustificationBits = make([]byte, 0, len(buf[2687256:2687257]))
+		b.JustificationBits = make([]byte, 0, 1)
 	}
-	b.JustificationBits = append(b.JustificationBits, buf[2687256:2687257]...)
+	b.JustificationBits = append(b.JustificationBits, buf[justificationBitsStart:justificationBitsStart+1]...)
 
 	// Field (18) 'PreviousJustifiedCheckpoint'
+	prevJustifiedStart := justificationBitsStart + 1
 	if b.PreviousJustifiedCheckpoint == nil {
 		b.PreviousJustifiedCheckpoint = new(phase0.Checkpoint)
 	}
-	if err = b.PreviousJustifiedCheckpoint.UnmarshalSSZ(buf[2687257:2687297]); err != nil {
+	if err = b.PreviousJustifiedCheckpoint.UnmarshalSSZ(buf[prevJustifiedStart : prevJustifiedStart+40]); err != nil {
 		return err
 	}
 
 	// Field (19) 'CurrentJustifiedCheckpoint'
+	currJustifiedStart := prevJustifiedStart + 40
 	if b.CurrentJustifiedCheckpoint == nil {
 		b.CurrentJustifiedCheckpoint = new(phase0.Checkpoint)
 	}
-	if err = b.CurrentJustifiedCheckpoint.UnmarshalSSZ(buf[2687297:2687337]); err != nil {
+	if err = b.CurrentJustifiedCheckpoint.UnmarshalSSZ(buf[currJustifiedStart : currJustifiedStart+40]); err != nil {
 		return err
 	}
 
 	// Field (20) 'FinalizedCheckpoint'
+	finalizedStart := currJustifiedStart + 40
 	if b.FinalizedCheckpoint == nil {
 		b.FinalizedCheckpoint = new(phase0.Checkpoint)
 	}
-	if err = b.FinalizedCheckpoint.UnmarshalSSZ(buf[2687337:2687377]); err != nil {
+	if err = b.FinalizedCheckpoint.UnmarshalSSZ(buf[finalizedStart : finalizedStart+40]); err != nil {
 		return err
 	}
 
 	// Offset (21) 'InactivityScores'
-	if o21 = ssz.ReadOffset(buf[2687377:2687381]); o21 > size || o16 > o21 {
+	inactivityScoresOffsetStart := finalizedStart + 40
+	if o21 = ssz.ReadOffset(buf[inactivityScoresOffsetStart : inactivityScoresOffsetStart+4]); o21 > size || o16 > o21 {
 		return ssz.ErrOffset
 	}
 
 	// Field (22) 'CurrentSyncCommittee'
+	currentSyncCommitteeStart := inactivityScoresOffsetStart + 4
+	currentSyncCommitteeEnd := currentSyncCommitteeStart + 24624
 	if b.CurrentSyncCommittee == nil {
 		b.CurrentSyncCommittee = new(altair.SyncCommittee)
 	}
-	if err = b.CurrentSyncCommittee.UnmarshalSSZ(buf[2687381:2712005]); err != nil {
+	if err = b.CurrentSyncCommittee.UnmarshalSSZ(buf[currentSyncCommitteeStart:currentSyncCommitteeEnd]); err != nil {
 		return err
 	}
 
 	// Field (23) 'NextSyncCommittee'
+	nextSyncCommitteeStart := currentSyncCommitteeEnd
+	nextSyncCommitteeEnd := nextSyncCommitteeStart + 24624
 	if b.NextSyncCommittee == nil {
 		b.NextSyncCommittee = new(altair.SyncCommittee)
 	}
-	if err = b.NextSyncCommittee.UnmarshalSSZ(buf[2712005:2736629]); err != nil {
+	if err = b.NextSyncCommittee.UnmarshalSSZ(buf[nextSyncCommitteeStart:nextSyncCommitteeEnd]); err != nil {
 		return err
 	}
 
 	// Offset (24) 'LatestExecutionPayloadHeader'
-	if o24 = ssz.ReadOffset(buf[2736629:2736633]); o24 > size || o21 > o24 {
+	latestExecPayloadOffsetStart := nextSyncCommitteeEnd
+	if o24 = ssz.ReadOffset(buf[latestExecPayloadOffsetStart : latestExecPayloadOffsetStart+4]); o24 > size || o21 > o24 {
 		return ssz.ErrOffset
 	}
 
 	// Field (25) 'NextWithdrawalIndex'
-	b.NextWithdrawalIndex = capella.WithdrawalIndex(ssz.UnmarshallUint64(buf[2736633:2736641]))
+	nextWithdrawalIndexStart := latestExecPayloadOffsetStart + 4
+	b.NextWithdrawalIndex = capella.WithdrawalIndex(ssz.UnmarshallUint64(buf[nextWithdrawalIndexStart : nextWithdrawalIndexStart+8]))
 
 	// Field (26) 'NextWithdrawalValidatorIndex'
-	b.NextWithdrawalValidatorIndex = phase0.ValidatorIndex(ssz.UnmarshallUint64(buf[2736641:2736649]))
+	nextWithdrawalValidatorIndexStart := nextWithdrawalIndexStart + 8
+	b.NextWithdrawalValidatorIndex = phase0.ValidatorIndex(ssz.UnmarshallUint64(buf[nextWithdrawalValidatorIndexStart : nextWithdrawalValidatorIndexStart+8]))
 
 	// Offset (27) 'HistoricalSummaries'
-	if o27 = ssz.ReadOffset(buf[2736649:2736653]); o27 > size || o24 > o27 {
+	historicalSummariesOffsetStart := nextWithdrawalValidatorIndexStart + 8
+	if o27 = ssz.ReadOffset(buf[historicalSummariesOffsetStart : historicalSummariesOffsetStart+4]); o27 > size || o24 > o27 {
 		return ssz.ErrOffset
 	}
 
 	// Field (28) 'DepositReceiptsStartIndex'
-	b.DepositRequestsStartIndex = ssz.UnmarshallUint64(buf[2736653:2736661])
+	depositReceiptsStartIndexStart := historicalSummariesOffsetStart + 4
+	b.DepositRequestsStartIndex = ssz.UnmarshallUint64(buf[depositReceiptsStartIndexStart : depositReceiptsStartIndexStart+8])
 
 	// Field (29) 'DepositBalanceToConsume'
-	b.DepositBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[2736661:2736669]))
+	depositBalanceToConsumeStart := depositReceiptsStartIndexStart + 8
+	b.DepositBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[depositBalanceToConsumeStart : depositBalanceToConsumeStart+8]))
 
 	// Field (30) 'ExitBalanceToConsume'
-	b.ExitBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[2736669:2736677]))
+	exitBalanceToConsumeStart := depositBalanceToConsumeStart + 8
+	b.ExitBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[exitBalanceToConsumeStart : exitBalanceToConsumeStart+8]))
 
 	// Field (31) 'EarliestExitEpoch'
-	b.EarliestExitEpoch = phase0.Epoch(ssz.UnmarshallUint64(buf[2736677:2736685]))
+	earliestExitEpochStart := exitBalanceToConsumeStart + 8
+	b.EarliestExitEpoch = phase0.Epoch(ssz.UnmarshallUint64(buf[earliestExitEpochStart : earliestExitEpochStart+8]))
 
 	// Field (32) 'ConsolidationBalanceToConsume'
-	b.ConsolidationBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[2736685:2736693]))
+	consolidationBalanceToConsumeStart := earliestExitEpochStart + 8
+	b.ConsolidationBalanceToConsume = phase0.Gwei(ssz.UnmarshallUint64(buf[consolidationBalanceToConsumeStart : consolidationBalanceToConsumeStart+8]))
 
 	// Field (33) 'EarliestConsolidationEpoch'
-	b.EarliestConsolidationEpoch = phase0.Epoch(ssz.UnmarshallUint64(buf[2736693:2736701]))
+	earliestConsolidationEpochStart := consolidationBalanceToConsumeStart + 8
+	b.EarliestConsolidationEpoch = phase0.Epoch(ssz.UnmarshallUint64(buf[earliestConsolidationEpochStart : earliestConsolidationEpochStart+8]))
 
 	// Offset (34) 'PendingBalanceDeposits'
-	if o34 = ssz.ReadOffset(buf[2736701:2736705]); o34 > size || o27 > o34 {
+	pendingBalanceDepositsOffsetStart := earliestConsolidationEpochStart + 8
+	if o34 = ssz.ReadOffset(buf[pendingBalanceDepositsOffsetStart : pendingBalanceDepositsOffsetStart+4]); o34 > size || o27 > o34 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (35) 'PendingPartialWithdrawals'
-	if o35 = ssz.ReadOffset(buf[2736705:2736709]); o35 > size || o34 > o35 {
+	pendingPartialWithdrawalsOffsetStart := pendingBalanceDepositsOffsetStart + 4
+	if o35 = ssz.ReadOffset(buf[pendingPartialWithdrawalsOffsetStart : pendingPartialWithdrawalsOffsetStart+4]); o35 > size || o34 > o35 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (36) 'PendingConsolidations'
-	if o36 = ssz.ReadOffset(buf[2736709:2736713]); o36 > size || o35 > o36 {
+	pendingConsolidationsOffsetStart := pendingPartialWithdrawalsOffsetStart + 4
+	if o36 = ssz.ReadOffset(buf[pendingConsolidationsOffsetStart : pendingConsolidationsOffsetStart+4]); o36 > size || o35 > o36 {
 		return ssz.ErrOffset
 	}
 

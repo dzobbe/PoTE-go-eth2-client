@@ -50,7 +50,7 @@ type beaconBlockHeaderJSON struct {
 	ParentRoot       string `json:"parent_root"`
 	StateRoot        string `json:"state_root"`
 	BodyRoot         string `json:"body_root"`
-	ProposerTEEType  *uint8 `json:"proposer_tee_type,omitempty"`
+	ProposerTEEType  string `json:"proposer_tee_type,omitempty"`
 	ProposerTEEQuote string `json:"proposer_tee_quote,omitempty"`
 }
 
@@ -76,8 +76,7 @@ func (b *BeaconBlockHeader) MarshalJSON() ([]byte, error) {
 	}
 
 	if b.ProposerTEEType != 0 || !isZeroTEEQuote(b.ProposerTEEQuote) {
-		teeType := b.ProposerTEEType
-		beaconBlockHeaderJSON.ProposerTEEType = &teeType
+		beaconBlockHeaderJSON.ProposerTEEType = fmt.Sprintf("%d", b.ProposerTEEType)
 		beaconBlockHeaderJSON.ProposerTEEQuote = fmt.Sprintf("%#x", b.ProposerTEEQuote[:])
 	}
 
@@ -98,19 +97,19 @@ func (b *BeaconBlockHeader) UnmarshalJSON(input []byte) error {
 		case string:
 			// Try to parse as number first
 			if num, err := strconv.ParseUint(v, 10, 8); err == nil {
-				raw["proposer_tee_type"] = uint8(num)
+				raw["proposer_tee_type"] = fmt.Sprintf("%d", num)
 			} else {
 				// Map TEE vendor names to numeric codes
 				teeTypeCode := mapTEEVendorNameToCode(v)
-				raw["proposer_tee_type"] = uint8(teeTypeCode)
+				raw["proposer_tee_type"] = fmt.Sprintf("%d", teeTypeCode)
 			}
 		case float64:
-			// Already a number, keep as number
-			raw["proposer_tee_type"] = uint8(v)
+			// Already a number, convert to string
+			raw["proposer_tee_type"] = fmt.Sprintf("%.0f", v)
 		case int:
-			raw["proposer_tee_type"] = uint8(v)
+			raw["proposer_tee_type"] = fmt.Sprintf("%d", v)
 		case int64:
-			raw["proposer_tee_type"] = uint8(v)
+			raw["proposer_tee_type"] = fmt.Sprintf("%d", v)
 		}
 	}
 
@@ -206,8 +205,12 @@ func (b *BeaconBlockHeader) unpack(beaconBlockHeaderJSON *beaconBlockHeaderJSON)
 	}
 	copy(b.BodyRoot[:], bodyRoot)
 
-	if beaconBlockHeaderJSON.ProposerTEEType != nil {
-		b.ProposerTEEType = *beaconBlockHeaderJSON.ProposerTEEType
+	if beaconBlockHeaderJSON.ProposerTEEType != "" {
+		teeType, err := strconv.ParseUint(beaconBlockHeaderJSON.ProposerTEEType, 10, 8)
+		if err != nil {
+			return errors.Wrap(err, "invalid value for proposer tee type")
+		}
+		b.ProposerTEEType = uint8(teeType)
 	} else {
 		b.ProposerTEEType = 0
 	}
@@ -284,18 +287,25 @@ func isZeroTEEQuote(quote [ProposerTEEQuoteLength]byte) bool {
 }
 
 // mapTEEVendorNameToCode maps TEE vendor names to numeric codes.
-// TEE vendor types:
-// 0 = AMD SEV (Secure Encrypted Virtualization)
-// 1 = Intel TDX (Trust Domain Extensions)
-// 2 = ARM CCA (Confidential Compute Architecture)
+// Common TEE vendors:
+// 0 = Unknown/None
+// 1 = Intel SGX (Software Guard Extensions)
+// 2 = Intel TDX (Trust Domain Extensions)
+// 3 = AMD SEV (Secure Encrypted Virtualization)
+// 4 = AMD SEV-ES (SEV with Encrypted State)
+// 5 = AMD SEV-SNP (SEV Secure Nested Paging)
 func mapTEEVendorNameToCode(name string) uint8 {
 	switch strings.ToUpper(name) {
-	case "SEV", "AMD-SEV":
-		return 0
-	case "TDX", "INTEL-TDX":
+	case "SGX", "INTEL-SGX":
 		return 1
-	case "CCA", "ARM-CCA":
+	case "TDX", "INTEL-TDX":
 		return 2
+	case "SEV", "AMD-SEV":
+		return 3
+	case "SEV-ES", "AMD-SEV-ES":
+		return 4
+	case "SEV-SNP", "AMD-SEV-SNP":
+		return 5
 	default:
 		return 0
 	}
