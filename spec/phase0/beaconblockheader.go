@@ -85,8 +85,47 @@ func (b *BeaconBlockHeader) MarshalJSON() ([]byte, error) {
 
 // UnmarshalJSON implements json.Unmarshaler.
 func (b *BeaconBlockHeader) UnmarshalJSON(input []byte) error {
+	// First unmarshal into a raw map to handle proposer_tee_quote as either string or array
+	var raw map[string]interface{}
+	if err := json.Unmarshal(input, &raw); err != nil {
+		return errors.Wrap(err, "invalid JSON")
+	}
+
+	// Convert proposer_tee_quote from array to hex string if needed
+	if quoteVal, exists := raw["proposer_tee_quote"]; exists && quoteVal != nil {
+		switch v := quoteVal.(type) {
+		case []interface{}:
+			// Convert byte array to hex string
+			bytes := make([]byte, 0, len(v))
+			for _, item := range v {
+				var bVal byte
+				switch num := item.(type) {
+				case float64:
+					bVal = byte(num)
+				case int:
+					bVal = byte(num)
+				case int64:
+					bVal = byte(num)
+				default:
+					return errors.New("invalid byte value in proposer_tee_quote array")
+				}
+				bytes = append(bytes, bVal)
+			}
+			raw["proposer_tee_quote"] = fmt.Sprintf("0x%x", bytes)
+		case string:
+			// Already a string, keep as is
+		default:
+			return errors.New("proposer_tee_quote must be either a string or an array")
+		}
+	}
+
+	// Now unmarshal into the struct
 	var beaconBlockHeaderJSON beaconBlockHeaderJSON
-	if err := json.Unmarshal(input, &beaconBlockHeaderJSON); err != nil {
+	modifiedInput, err := json.Marshal(raw)
+	if err != nil {
+		return errors.Wrap(err, "failed to re-marshal JSON")
+	}
+	if err := json.Unmarshal(modifiedInput, &beaconBlockHeaderJSON); err != nil {
 		return errors.Wrap(err, "invalid JSON")
 	}
 
