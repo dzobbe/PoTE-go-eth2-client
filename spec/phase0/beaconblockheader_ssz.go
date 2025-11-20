@@ -4,6 +4,8 @@
 package phase0
 
 import (
+	"fmt"
+
 	ssz "github.com/ferranbt/fastssz"
 )
 
@@ -44,9 +46,13 @@ func (b *BeaconBlockHeader) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 func (b *BeaconBlockHeader) UnmarshalSSZ(buf []byte) error {
 	var err error
 	size := uint64(len(buf))
+	expectedExtendedSize := uint64(112 + 1 + ProposerTEEQuoteLength)
+	fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Starting unmarshal, buffer size: %d bytes (expected: 112 or %d)\n", size, expectedExtendedSize)
+
 	switch size {
 	case 112:
 		// Legacy header without TEE fields.
+		fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Detected legacy header (112 bytes)\n")
 		b.Slot = Slot(ssz.UnmarshallUint64(buf[0:8]))
 		b.ProposerIndex = ValidatorIndex(ssz.UnmarshallUint64(buf[8:16]))
 		copy(b.ParentRoot[:], buf[16:48])
@@ -54,8 +60,10 @@ func (b *BeaconBlockHeader) UnmarshalSSZ(buf []byte) error {
 		copy(b.BodyRoot[:], buf[80:112])
 		b.ProposerTEEType = 0
 		b.ProposerTEEQuote = [ProposerTEEQuoteLength]byte{}
+		fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Legacy header unmarshaled - Slot: %d, ProposerIndex: %d\n", b.Slot, b.ProposerIndex)
 	case 112 + 1 + ProposerTEEQuoteLength:
 		// Field (0) 'Slot'
+		fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Detected extended header (%d bytes)\n", size)
 		b.Slot = Slot(ssz.UnmarshallUint64(buf[0:8]))
 
 		// Field (1) 'ProposerIndex'
@@ -72,13 +80,21 @@ func (b *BeaconBlockHeader) UnmarshalSSZ(buf []byte) error {
 
 		// Field (5) 'ProposerTEEType'
 		b.ProposerTEEType = uint8(buf[112])
+		if len(buf) < 113+ProposerTEEQuoteLength {
+			fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: ERROR - Buffer too small for TEE quote, need %d bytes but have %d\n", 113+ProposerTEEQuoteLength, len(buf))
+			return fmt.Errorf("buffer too small for TEE quote: need %d bytes, have %d", 113+ProposerTEEQuoteLength, len(buf))
+		}
 
 		// Field (6) 'ProposerTEEQuote'
 		copy(b.ProposerTEEQuote[:], buf[113:])
+		fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Extended header unmarshaled - Slot: %d, ProposerIndex: %d, TEEType: %d, TEEQuote[0:16]: %x\n",
+			b.Slot, b.ProposerIndex, b.ProposerTEEType, b.ProposerTEEQuote[:16])
 	default:
+		fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: ERROR - Invalid size: %d (expected 112 or %d)\n", size, expectedExtendedSize)
 		return ssz.ErrSize
 	}
 
+	fmt.Printf("[DEBUG] BeaconBlockHeader.UnmarshalSSZ: Successfully unmarshaled header\n")
 	return err
 }
 

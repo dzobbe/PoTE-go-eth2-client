@@ -4,6 +4,8 @@
 package electra
 
 import (
+	"fmt"
+
 	"github.com/attestantio/go-eth2-client/spec/altair"
 	"github.com/attestantio/go-eth2-client/spec/capella"
 	"github.com/attestantio/go-eth2-client/spec/deneb"
@@ -380,7 +382,9 @@ func (b *BeaconState) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	var err error
 	size := uint64(len(buf))
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Starting unmarshal, buffer size: %d bytes\n", size)
 	if size < 2736713 {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Buffer too small: %d < 2736713\n", size)
 		return ssz.ErrSize
 	}
 
@@ -389,20 +393,25 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Field (0) 'GenesisTime'
 	b.GenesisTime = ssz.UnmarshallUint64(buf[0:8])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: GenesisTime: %d\n", b.GenesisTime)
 
 	// Field (1) 'GenesisValidatorsRoot'
 	copy(b.GenesisValidatorsRoot[:], buf[8:40])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: GenesisValidatorsRoot: %x\n", b.GenesisValidatorsRoot[:])
 
 	// Field (2) 'Slot'
 	b.Slot = phase0.Slot(ssz.UnmarshallUint64(buf[40:48]))
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Slot: %d\n", b.Slot)
 
 	// Field (3) 'Fork'
 	if b.Fork == nil {
 		b.Fork = new(phase0.Fork)
 	}
 	if err = b.Fork.UnmarshalSSZ(buf[48:64]); err != nil {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Failed to unmarshal Fork at offset 48-64: %v\n", err)
 		return err
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Fork unmarshaled successfully\n")
 
 	// Field (4) 'LatestBlockHeader'
 	if b.LatestBlockHeader == nil {
@@ -414,8 +423,12 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	extendedHeaderSize := 112 + 1 + phase0.ProposerTEEQuoteLength // Extended header size (8305)
 	legacyHeaderSize := 112
 
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Header detection - start: %d, extended: %d, legacy: %d, buffer len: %d\n",
+		headerStart, extendedHeaderSize, legacyHeaderSize, len(buf))
+
 	var headerSize int
 	if headerStart+extendedHeaderSize <= len(buf) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Attempting extended header unmarshal (size: %d)\n", extendedHeaderSize)
 		// Try to unmarshal with extended size to see if it's valid
 		tempHeader := &phase0.BeaconBlockHeader{}
 		// Create a slice of exactly the right size for the header
@@ -423,52 +436,90 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 		copy(headerBuf, buf[headerStart:headerStart+extendedHeaderSize])
 		if err = tempHeader.UnmarshalSSZ(headerBuf); err == nil {
 			// Extended header worked
+			fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Extended header unmarshaled successfully (size: %d)\n", extendedHeaderSize)
+			fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Header TEE type: %d, TEE quote first 16 bytes: %x\n",
+				tempHeader.ProposerTEEType, tempHeader.ProposerTEEQuote[:16])
 			headerSize = extendedHeaderSize
 			b.LatestBlockHeader = tempHeader
 		} else {
 			// Fallback to legacy size
+			fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Extended header unmarshal failed: %v, falling back to legacy\n", err)
 			headerSize = legacyHeaderSize
 		}
 	} else {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Buffer too small for extended header, using legacy (available: %d, needed: %d)\n",
+			len(buf)-headerStart, extendedHeaderSize)
 		headerSize = legacyHeaderSize
 	}
 
 	// If we haven't unmarshaled yet (legacy case), do it now
 	if headerSize == legacyHeaderSize {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Unmarshaling legacy header (size: %d)\n", legacyHeaderSize)
 		headerBuf := make([]byte, legacyHeaderSize)
 		copy(headerBuf, buf[headerStart:headerStart+legacyHeaderSize])
 		if err = b.LatestBlockHeader.UnmarshalSSZ(headerBuf); err != nil {
+			fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy header unmarshal failed: %v\n", err)
 			return err
 		}
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy header unmarshaled successfully\n")
 	}
 
 	headerEnd := headerStart + headerSize
 	headerSizeDiff := headerSize - legacyHeaderSize // Difference from legacy size
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Header size: %d, headerEnd: %d, headerSizeDiff: %d\n",
+		headerSize, headerEnd, headerSizeDiff)
 
 	// Field (5) 'BlockRoots'
 	blockRootsStart := headerEnd
 	blockRootsEnd := blockRootsStart + 8192*32
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: BlockRoots range: %d-%d (size: %d)\n",
+		blockRootsStart, blockRootsEnd, blockRootsEnd-blockRootsStart)
+	if blockRootsEnd > len(buf) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - BlockRoots end (%d) exceeds buffer size (%d)\n",
+			blockRootsEnd, len(buf))
+		return fmt.Errorf("blockRootsEnd (%d) exceeds buffer size (%d)", blockRootsEnd, len(buf))
+	}
 	b.BlockRoots = make([]phase0.Root, 8192)
 	for ii := 0; ii < 8192; ii++ {
 		copy(b.BlockRoots[ii][:], buf[blockRootsStart:blockRootsEnd][ii*32:(ii+1)*32])
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: BlockRoots unmarshaled successfully\n")
 
 	// Field (6) 'StateRoots'
 	stateRootsStart := blockRootsEnd
 	stateRootsEnd := stateRootsStart + 8192*32
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: StateRoots range: %d-%d (size: %d)\n",
+		stateRootsStart, stateRootsEnd, stateRootsEnd-stateRootsStart)
+	if stateRootsEnd > len(buf) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - StateRoots end (%d) exceeds buffer size (%d)\n",
+			stateRootsEnd, len(buf))
+		return fmt.Errorf("stateRootsEnd (%d) exceeds buffer size (%d)", stateRootsEnd, len(buf))
+	}
 	b.StateRoots = make([]phase0.Root, 8192)
 	for ii := 0; ii < 8192; ii++ {
 		copy(b.StateRoots[ii][:], buf[stateRootsStart:stateRootsEnd][ii*32:(ii+1)*32])
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: StateRoots unmarshaled successfully\n")
 
 	// Offset (7) 'HistoricalRoots'
 	// Offset section starts after StateRoots
 	offsetsStart := stateRootsEnd
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offsets start at: %d\n", offsetsStart)
+	if offsetsStart+4 > len(buf) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Cannot read offset, need 4 bytes at %d but buffer size is %d\n",
+			offsetsStart, len(buf))
+		return fmt.Errorf("cannot read offset at %d, buffer size is %d", offsetsStart, len(buf))
+	}
 	if o7 = ssz.ReadOffset(buf[offsetsStart : offsetsStart+4]); o7 > size {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Offset o7 (%d) exceeds buffer size (%d)\n", o7, size)
 		return ssz.ErrOffset
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 (HistoricalRoots): %d, min expected: %d\n",
+		o7, 2736713+uint64(headerSizeDiff))
 
 	if o7 < 2736713+uint64(headerSizeDiff) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid variable offset: o7 (%d) < min (%d)\n",
+			o7, 2736713+uint64(headerSizeDiff))
 		return ssz.ErrInvalidVariableOffset
 	}
 
@@ -476,18 +527,28 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	// ETH1Data starts after 12 offsets (48 bytes)
 	eth1DataStart := offsetsStart + 12*4
 	eth1DataEnd := eth1DataStart + 72
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data range: %d-%d\n", eth1DataStart, eth1DataEnd)
+	if eth1DataEnd > len(buf) {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - ETH1Data end (%d) exceeds buffer size (%d)\n",
+			eth1DataEnd, len(buf))
+		return fmt.Errorf("eth1DataEnd (%d) exceeds buffer size (%d)", eth1DataEnd, len(buf))
+	}
 	if b.ETH1Data == nil {
 		b.ETH1Data = new(phase0.ETH1Data)
 	}
 	if err = b.ETH1Data.UnmarshalSSZ(buf[eth1DataStart:eth1DataEnd]); err != nil {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Failed to unmarshal ETH1Data: %v\n", err)
 		return err
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
 	eth1DataVotesOffsetStart := eth1DataEnd
 	if o9 = ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4]); o9 > size || o7 > o9 {
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (size: %d, o7: %d)\n", o9, size, o7)
 		return ssz.ErrOffset
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes): %d\n", o9)
 
 	// Field (10) 'ETH1DepositIndex'
 	eth1DepositIndexStart := eth1DataVotesOffsetStart + 4
@@ -838,6 +899,7 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 			}
 		}
 	}
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Successfully unmarshaled all fields\n")
 	return err
 }
 
