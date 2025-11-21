@@ -581,22 +581,52 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
-	// Offset 9 comes AFTER Field (8) ETH1Data (which is 72 bytes)
-	// So: o7 at actualOffsetsStart+0, then ETH1Data (72 bytes), then o9
-	eth1DataVotesOffsetStart := eth1DataEnd // After ETH1Data
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d (after ETH1Data), raw bytes: %x\n",
+	// According to marshal code: o7 written, then ETH1Data (72 bytes), then o9
+	// But wait - looking at marshal code more carefully:
+	// Offset (7) is written at actualOffsetsStart
+	// Field (8) ETH1Data is written AFTER the offsets section (after all 12 offsets = 48 bytes)
+	// So ETH1Data starts at actualOffsetsStart + 12*4 = actualOffsetsStart + 48
+	// Then Offset (9) comes after ETH1Data
+
+	// Let's check: if offsets are all stored together first, then fixed fields
+	// o7 at actualOffsetsStart + 0*4
+	// o8 (if exists) at actualOffsetsStart + 1*4
+	// ... all 12 offsets stored together (48 bytes)
+	// Then ETH1Data at actualOffsetsStart + 48
+	// Then o9 would be at actualOffsetsStart + 48 + 72 = actualOffsetsStart + 120
+
+	// But the marshal code shows offsets are interleaved. Let me check the actual structure:
+	// Looking at marshal: o7 written, then ETH1Data written, then o9 written
+	// So: o7 (4 bytes) -> ETH1Data (72 bytes) -> o9 (4 bytes)
+
+	eth1DataVotesOffsetStart := eth1DataEnd // After ETH1Data (72 bytes)
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d (eth1DataEnd), raw bytes: %x\n",
 		eth1DataVotesOffsetStart, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
 
-	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 raw value: %d (0x%x) at position %d\n",
-		o9Raw, o9Raw, eth1DataVotesOffsetStart)
+	// Also check if o9 might be stored in the offsets section
+	// If all offsets are stored together: o7 at actualOffsetsStart+0, o9 at actualOffsetsStart+8*4
+	o9FromOffsetsSection := actualOffsetsStart + 8*4
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Also checking o9 at offsets section position %d, raw bytes: %x\n",
+		o9FromOffsetsSection, buf[o9FromOffsetsSection:o9FromOffsetsSection+4])
 
-	// Offsets are already correct for the actual header size, no adjustment needed
-	o9 = o9Raw
+	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
+	o9FromOffsets := ssz.ReadOffset(buf[o9FromOffsetsSection : o9FromOffsetsSection+4])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: o9 from eth1DataEnd (%d): %d, from offsets section (%d): %d\n",
+		eth1DataVotesOffsetStart, o9Raw, o9FromOffsetsSection, o9FromOffsets)
+
+	// Use the one that makes sense (valid range and > o7)
+	if o9FromOffsets < size && o9FromOffsets > o7 && o9FromOffsets < o7+1000000 {
+		// Offsets are stored together in offsets section
+		eth1DataVotesOffsetStart = o9FromOffsetsSection
+		o9 = o9FromOffsets
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using o9 from offsets section: %d\n", o9)
+	} else {
+		o9 = o9Raw
+	}
 
 	if o9 > size || o7 > o9 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (raw: %d, size: %d, o7: %d)\n",
-			o9, o9Raw, size, o7)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (from eth1DataEnd: %d, from offsets: %d, size: %d, o7: %d)\n",
+			o9, o9Raw, o9FromOffsets, size, o7)
 		return ssz.ErrOffset
 	}
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes): %d\n", o9)
