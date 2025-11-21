@@ -581,13 +581,31 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
+	// The offset should be stored right after ETH1Data (which is 72 bytes)
+	// But we need to check if ETH1Data is at the correct position
 	eth1DataVotesOffsetStart := eth1DataEnd
-	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 raw value: %d (0x%x) at position %d\n",
-		o9Raw, o9Raw, eth1DataVotesOffsetStart)
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d, raw bytes: %x\n",
+		eth1DataVotesOffsetStart, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
 
-	// Adjust offset if SSZ was encoded with legacy header
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+	// Check if we should read from legacy position instead
+	legacyEth1DataStart := legacyOffsetsStart + 12*4
+	legacyEth1DataEnd := legacyEth1DataStart + 72
+	legacyEth1DataVotesOffsetStart := legacyEth1DataEnd
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy o9 would be at position %d, raw bytes: %x\n",
+		legacyEth1DataVotesOffsetStart, buf[legacyEth1DataVotesOffsetStart:legacyEth1DataVotesOffsetStart+4])
+
+	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
+	o9FromLegacy := ssz.ReadOffset(buf[legacyEth1DataVotesOffsetStart : legacyEth1DataVotesOffsetStart+4])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 from current pos (%d): %d, from legacy pos (%d): %d\n",
+		eth1DataVotesOffsetStart, o9Raw, legacyEth1DataVotesOffsetStart, o9FromLegacy)
+
+	// Determine which offset to use
+	if headerSizeDiff > 0 && o9FromLegacy < size && o9FromLegacy > o7 && (o9Raw > size || o9Raw < o7) {
+		// Use legacy position
+		o9Raw = o9FromLegacy
+		eth1DataVotesOffsetStart = legacyEth1DataVotesOffsetStart
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using legacy offset position for o9\n")
+		// Adjust offset value for extended header
 		o9 = o9Raw + uint64(headerSizeDiff)
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Adjusted o9 from %d to %d (added %d)\n", o9Raw, o9, headerSizeDiff)
 	} else {
