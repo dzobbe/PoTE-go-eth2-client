@@ -501,57 +501,29 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: StateRoots unmarshaled successfully\n")
 
-	// Offset (7) 'HistoricalRoots'
+	// Following the marshal code structure exactly:
+	// After StateRoots, we have the offsets section (12 offsets = 48 bytes), then fixed fields
+
 	// Offset section starts after StateRoots
 	offsetsStart := stateRootsEnd
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offsets start at: %d\n", offsetsStart)
 
-	// Check if offsets might be stored at legacy position (if SSZ was encoded with legacy header)
-	legacyStateRootsEnd := 64 + legacyHeaderSize + 8192*32 + 8192*32 // 524464
-	legacyOffsetsStart := legacyStateRootsEnd
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy offsets would start at: %d, current: %d, diff: %d\n",
-		legacyOffsetsStart, offsetsStart, offsetsStart-legacyOffsetsStart)
-
-	// Try reading offset from both positions to detect which one is correct
-	o7FromCurrent := ssz.ReadOffset(buf[offsetsStart : offsetsStart+4])
-	o7FromLegacy := ssz.ReadOffset(buf[legacyOffsetsStart : legacyOffsetsStart+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: o7 from current pos (%d): %d, from legacy pos (%d): %d\n",
-		offsetsStart, o7FromCurrent, legacyOffsetsStart, o7FromLegacy)
-
-	// Determine which offset position is correct based on validity
-	// If SSZ was encoded with legacy header but we're decoding with extended, offsets are at legacy position
-	var actualOffsetsStart int
-	if headerSizeDiff > 0 && o7FromLegacy < size && o7FromLegacy > 0 && (o7FromCurrent > size || o7FromCurrent == 0) {
-		// Offsets are stored at legacy position
-		actualOffsetsStart = legacyOffsetsStart
-		o7 = o7FromLegacy
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using legacy offset position (SSZ encoded with legacy header)\n")
-	} else {
-		// Offsets are stored at current position
-		actualOffsetsStart = offsetsStart
-		o7 = o7FromCurrent
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using current offset position\n")
-	}
-
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 raw value: %d (0x%x), headerSizeDiff: %d, actualOffsetsStart: %d\n",
-		o7, o7, headerSizeDiff, actualOffsetsStart)
-
-	// If SSZ was encoded with legacy header but we have extended header, adjust offset values
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o7 = o7 + uint64(headerSizeDiff)
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Adjusted o7 by adding headerSizeDiff: %d\n", headerSizeDiff)
-	}
+	// According to marshal code: all 12 offsets are written first, then fixed fields
+	// Offset (7) 'HistoricalRoots' - first offset (position 0 in offsets section)
+	o7 = ssz.ReadOffset(buf[offsetsStart : offsetsStart+4])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 (HistoricalRoots) at position %d: %d (0x%x)\n",
+		offsetsStart, o7, o7)
 
 	if o7 > size {
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Offset o7 (%d) exceeds buffer size (%d)\n", o7, size)
 		return ssz.ErrOffset
 	}
 
-	// Calculate minimum expected offset based on actual header size
-	// Fixed portion: genesis(8) + root(32) + slot(8) + fork(16) + header(variable) + blockRoots(262144) + stateRoots(262144) + offsets(48) + fixed fields after offsets
+	// Calculate minimum expected offset based on actual header size (same as marshal code)
 	fixedPortionBeforeOffsets := 8 + 32 + 8 + 16 + headerSize + 8192*32 + 8192*32
+	offsetsSize := 12 * 4 // 12 offsets, 4 bytes each
 	fixedPortionAfterOffsets := 72 + 8 + 65536*32 + 8192*8 + 1 + 40 + 40 + 40 + 24624 + 24624 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8
-	minExpectedOffset := uint64(fixedPortionBeforeOffsets + 12*4 + fixedPortionAfterOffsets)
+	minExpectedOffset := uint64(fixedPortionBeforeOffsets + offsetsSize + fixedPortionAfterOffsets)
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 (HistoricalRoots): %d, min expected: %d (headerSize: %d)\n",
 		o7, minExpectedOffset, headerSize)
 
@@ -562,8 +534,8 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Field (8) 'ETH1Data'
-	// ETH1Data starts after 12 offsets (48 bytes) from the actual offsets start position
-	eth1DataStart := actualOffsetsStart + 12*4
+	// According to marshal: after all 12 offsets (48 bytes), then ETH1Data
+	eth1DataStart := offsetsStart + 12*4
 	eth1DataEnd := eth1DataStart + 72
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data range: %d-%d\n", eth1DataStart, eth1DataEnd)
 	if eth1DataEnd > len(buf) {
@@ -581,78 +553,54 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
-	// According to marshal code: o7 written, then ETH1Data (72 bytes), then o9
-	// But wait - looking at marshal code more carefully:
-	// Offset (7) is written at actualOffsetsStart
-	// Field (8) ETH1Data is written AFTER the offsets section (after all 12 offsets = 48 bytes)
-	// So ETH1Data starts at actualOffsetsStart + 12*4 = actualOffsetsStart + 48
-	// Then Offset (9) comes after ETH1Data
+	// According to marshal code: after ETH1Data, then offset (9)
+	// But wait - marshal shows offsets are written interleaved with fields
+	// However, SSZ spec says all offsets come first, then fixed fields
+	// Let me check: marshal writes o7, then ETH1Data, then o9
+	// This suggests offsets are NOT all together, but interleaved
 
-	// Let's check: if offsets are all stored together first, then fixed fields
-	// o7 at actualOffsetsStart + 0*4
-	// o8 (if exists) at actualOffsetsStart + 1*4
-	// ... all 12 offsets stored together (48 bytes)
-	// Then ETH1Data at actualOffsetsStart + 48
-	// Then o9 would be at actualOffsetsStart + 48 + 72 = actualOffsetsStart + 120
+	// Actually, looking at the marshal code structure more carefully:
+	// The marshal code writes: o7, ETH1Data, o9, ETH1DepositIndex, o11, o12, RANDAOMixes, Slashings, o15, o16, ...
+	// This is interleaved! But SSZ typically stores offsets together.
 
-	// But the marshal code shows offsets are interleaved. Let me check the actual structure:
-	// Looking at marshal: o7 written, then ETH1Data written, then o9 written
-	// So: o7 (4 bytes) -> ETH1Data (72 bytes) -> o9 (4 bytes)
-
-	eth1DataVotesOffsetStart := eth1DataEnd // After ETH1Data (72 bytes)
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d (eth1DataEnd), raw bytes: %x\n",
+	// Let me try: offsets are stored together first (12 offsets = 48 bytes), then fields
+	// o7 at offsetsStart+0, o9 at offsetsStart+8*4 (since o7=0, o8 doesn't exist, o9=8)
+	eth1DataVotesOffsetStart := offsetsStart + 8*4 // Offset 9 is the 9th offset (index 8, 0-indexed from o7)
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from offsets section position %d, raw bytes: %x\n",
 		eth1DataVotesOffsetStart, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
 
-	// Also check if o9 might be stored in the offsets section
-	// If all offsets are stored together: o7 at actualOffsetsStart+0, o9 at actualOffsetsStart+8*4
-	o9FromOffsetsSection := actualOffsetsStart + 8*4
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Also checking o9 at offsets section position %d, raw bytes: %x\n",
-		o9FromOffsetsSection, buf[o9FromOffsetsSection:o9FromOffsetsSection+4])
-
-	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
-	o9FromOffsets := ssz.ReadOffset(buf[o9FromOffsetsSection : o9FromOffsetsSection+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: o9 from eth1DataEnd (%d): %d, from offsets section (%d): %d\n",
-		eth1DataVotesOffsetStart, o9Raw, o9FromOffsetsSection, o9FromOffsets)
-
-	// Use the one that makes sense (valid range and > o7)
-	if o9FromOffsets < size && o9FromOffsets > o7 && o9FromOffsets < o7+1000000 {
-		// Offsets are stored together in offsets section
-		eth1DataVotesOffsetStart = o9FromOffsetsSection
-		o9 = o9FromOffsets
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using o9 from offsets section: %d\n", o9)
-	} else {
-		o9 = o9Raw
-	}
+	o9 = ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes) at position %d: %d (0x%x)\n",
+		eth1DataVotesOffsetStart, o9, o9)
 
 	if o9 > size || o7 > o9 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (from eth1DataEnd: %d, from offsets: %d, size: %d, o7: %d)\n",
-			o9, o9Raw, o9FromOffsets, size, o7)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (size: %d, o7: %d)\n",
+			o9, size, o7)
 		return ssz.ErrOffset
 	}
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes): %d\n", o9)
 
 	// Field (10) 'ETH1DepositIndex'
-	// ETH1DepositIndex comes after offset 9
-	eth1DepositIndexStart := eth1DataVotesOffsetStart + 4
+	// According to marshal: after offset (9), then ETH1DepositIndex
+	// But if offsets are all together, then ETH1DepositIndex comes after all offsets + ETH1Data
+	eth1DepositIndexStart := eth1DataEnd // After ETH1Data (which is after all offsets)
 	b.ETH1DepositIndex = ssz.UnmarshallUint64(buf[eth1DepositIndexStart : eth1DepositIndexStart+8])
 
 	// Offset (11) 'Validators'
-	// Offset 11 comes AFTER Field (10) ETH1DepositIndex (which is 8 bytes)
-	validatorsOffsetStart := eth1DepositIndexStart + 8
-	o11Raw := ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4])
-	o11 = o11Raw
+	// According to marshal: after ETH1DepositIndex (8 bytes), then offset (11)
+	validatorsOffsetStart := eth1DepositIndexStart + 8 // After ETH1DepositIndex
+	o11 = ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4])
 	if o11 > size || o9 > o11 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o11: %d (raw: %d, size: %d, o9: %d)\n", o11, o11Raw, size, o9)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o11: %d (size: %d, o9: %d)\n", o11, size, o9)
 		return ssz.ErrOffset
 	}
 
 	// Offset (12) 'Balances'
-	// Offset 12 comes right after offset 11
-	balancesOffsetStart := validatorsOffsetStart + 4
-	o12Raw := ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4])
-	o12 = o12Raw
+	// According to marshal: after offset (11), then offset (12)
+	balancesOffsetStart := validatorsOffsetStart + 4 // After o11
+	o12 = ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4])
 	if o12 > size || o11 > o12 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o12: %d (raw: %d, size: %d, o11: %d)\n", o12, o12Raw, size, o11)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o12: %d (size: %d, o11: %d)\n", o12, size, o11)
 		return ssz.ErrOffset
 	}
 
@@ -673,25 +621,17 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Offset (15) 'PreviousEpochParticipation'
+	// According to marshal: after Slashings, then offset (15)
 	prevEpochPartOffsetStart := slashingsEnd
-	o15Raw := ssz.ReadOffset(buf[prevEpochPartOffsetStart : prevEpochPartOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o15 = o15Raw + uint64(headerSizeDiff)
-	} else {
-		o15 = o15Raw
-	}
+	o15 = ssz.ReadOffset(buf[prevEpochPartOffsetStart : prevEpochPartOffsetStart+4])
 	if o15 > size || o12 > o15 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (16) 'CurrentEpochParticipation'
+	// According to marshal: after offset (15), then offset (16)
 	currEpochPartOffsetStart := prevEpochPartOffsetStart + 4
-	o16Raw := ssz.ReadOffset(buf[currEpochPartOffsetStart : currEpochPartOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o16 = o16Raw + uint64(headerSizeDiff)
-	} else {
-		o16 = o16Raw
-	}
+	o16 = ssz.ReadOffset(buf[currEpochPartOffsetStart : currEpochPartOffsetStart+4])
 	if o16 > size || o15 > o16 {
 		return ssz.ErrOffset
 	}
@@ -731,13 +671,9 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Offset (21) 'InactivityScores'
+	// According to marshal: after FinalizedCheckpoint (40 bytes), then offset (21)
 	inactivityScoresOffsetStart := finalizedStart + 40
-	o21Raw := ssz.ReadOffset(buf[inactivityScoresOffsetStart : inactivityScoresOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o21 = o21Raw + uint64(headerSizeDiff)
-	} else {
-		o21 = o21Raw
-	}
+	o21 = ssz.ReadOffset(buf[inactivityScoresOffsetStart : inactivityScoresOffsetStart+4])
 	if o21 > size || o16 > o21 {
 		return ssz.ErrOffset
 	}
@@ -763,13 +699,9 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Offset (24) 'LatestExecutionPayloadHeader'
+	// According to marshal: after NextSyncCommittee (24624 bytes), then offset (24)
 	latestExecPayloadOffsetStart := nextSyncCommitteeEnd
-	o24Raw := ssz.ReadOffset(buf[latestExecPayloadOffsetStart : latestExecPayloadOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o24 = o24Raw + uint64(headerSizeDiff)
-	} else {
-		o24 = o24Raw
-	}
+	o24 = ssz.ReadOffset(buf[latestExecPayloadOffsetStart : latestExecPayloadOffsetStart+4])
 	if o24 > size || o21 > o24 {
 		return ssz.ErrOffset
 	}
@@ -783,13 +715,9 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	b.NextWithdrawalValidatorIndex = phase0.ValidatorIndex(ssz.UnmarshallUint64(buf[nextWithdrawalValidatorIndexStart : nextWithdrawalValidatorIndexStart+8]))
 
 	// Offset (27) 'HistoricalSummaries'
+	// According to marshal: after NextWithdrawalValidatorIndex (8 bytes), then offset (27)
 	historicalSummariesOffsetStart := nextWithdrawalValidatorIndexStart + 8
-	o27Raw := ssz.ReadOffset(buf[historicalSummariesOffsetStart : historicalSummariesOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o27 = o27Raw + uint64(headerSizeDiff)
-	} else {
-		o27 = o27Raw
-	}
+	o27 = ssz.ReadOffset(buf[historicalSummariesOffsetStart : historicalSummariesOffsetStart+4])
 	if o27 > size || o24 > o27 {
 		return ssz.ErrOffset
 	}
@@ -819,37 +747,25 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	b.EarliestConsolidationEpoch = phase0.Epoch(ssz.UnmarshallUint64(buf[earliestConsolidationEpochStart : earliestConsolidationEpochStart+8]))
 
 	// Offset (34) 'PendingBalanceDeposits'
+	// According to marshal: after EarliestConsolidationEpoch (8 bytes), then offset (34)
 	pendingBalanceDepositsOffsetStart := earliestConsolidationEpochStart + 8
-	o34Raw := ssz.ReadOffset(buf[pendingBalanceDepositsOffsetStart : pendingBalanceDepositsOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o34 = o34Raw + uint64(headerSizeDiff)
-	} else {
-		o34 = o34Raw
-	}
+	o34 = ssz.ReadOffset(buf[pendingBalanceDepositsOffsetStart : pendingBalanceDepositsOffsetStart+4])
 	if o34 > size || o27 > o34 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (35) 'PendingPartialWithdrawals'
+	// According to marshal: after offset (34), then offset (35)
 	pendingPartialWithdrawalsOffsetStart := pendingBalanceDepositsOffsetStart + 4
-	o35Raw := ssz.ReadOffset(buf[pendingPartialWithdrawalsOffsetStart : pendingPartialWithdrawalsOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o35 = o35Raw + uint64(headerSizeDiff)
-	} else {
-		o35 = o35Raw
-	}
+	o35 = ssz.ReadOffset(buf[pendingPartialWithdrawalsOffsetStart : pendingPartialWithdrawalsOffsetStart+4])
 	if o35 > size || o34 > o35 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (36) 'PendingConsolidations'
+	// According to marshal: after offset (35), then offset (36)
 	pendingConsolidationsOffsetStart := pendingPartialWithdrawalsOffsetStart + 4
-	o36Raw := ssz.ReadOffset(buf[pendingConsolidationsOffsetStart : pendingConsolidationsOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o36 = o36Raw + uint64(headerSizeDiff)
-	} else {
-		o36 = o36Raw
-	}
+	o36 = ssz.ReadOffset(buf[pendingConsolidationsOffsetStart : pendingConsolidationsOffsetStart+4])
 	if o36 > size || o35 > o36 {
 		return ssz.ErrOffset
 	}
