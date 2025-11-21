@@ -505,17 +505,42 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	// Offset section starts after StateRoots
 	offsetsStart := stateRootsEnd
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offsets start at: %d\n", offsetsStart)
-	if offsetsStart+4 > len(buf) {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Cannot read offset, need 4 bytes at %d but buffer size is %d\n",
-			offsetsStart, len(buf))
-		return fmt.Errorf("cannot read offset at %d, buffer size is %d", offsetsStart, len(buf))
-	}
-	o7 = ssz.ReadOffset(buf[offsetsStart : offsetsStart+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 raw value: %d (0x%x), headerSizeDiff: %d\n",
-		o7, o7, headerSizeDiff)
 
-	// Note: Offsets stored in SSZ are absolute positions and already account for the actual header size
-	// (whether legacy or extended), so no adjustment is needed
+	// Check if offsets might be stored at legacy position (if SSZ was encoded with legacy header)
+	legacyStateRootsEnd := 64 + legacyHeaderSize + 8192*32 + 8192*32 // 524464
+	legacyOffsetsStart := legacyStateRootsEnd
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy offsets would start at: %d, current: %d, diff: %d\n",
+		legacyOffsetsStart, offsetsStart, offsetsStart-legacyOffsetsStart)
+
+	// Try reading offset from both positions to detect which one is correct
+	o7FromCurrent := ssz.ReadOffset(buf[offsetsStart : offsetsStart+4])
+	o7FromLegacy := ssz.ReadOffset(buf[legacyOffsetsStart : legacyOffsetsStart+4])
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: o7 from current pos (%d): %d, from legacy pos (%d): %d\n",
+		offsetsStart, o7FromCurrent, legacyOffsetsStart, o7FromLegacy)
+
+	// Determine which offset position is correct based on validity
+	// If SSZ was encoded with legacy header but we're decoding with extended, offsets are at legacy position
+	var actualOffsetsStart int
+	if headerSizeDiff > 0 && o7FromLegacy < size && o7FromLegacy > 0 && (o7FromCurrent > size || o7FromCurrent == 0) {
+		// Offsets are stored at legacy position
+		actualOffsetsStart = legacyOffsetsStart
+		o7 = o7FromLegacy
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using legacy offset position (SSZ encoded with legacy header)\n")
+	} else {
+		// Offsets are stored at current position
+		actualOffsetsStart = offsetsStart
+		o7 = o7FromCurrent
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using current offset position\n")
+	}
+
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o7 raw value: %d (0x%x), headerSizeDiff: %d, actualOffsetsStart: %d\n",
+		o7, o7, headerSizeDiff, actualOffsetsStart)
+
+	// If SSZ was encoded with legacy header but we have extended header, adjust offset values
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o7 = o7 + uint64(headerSizeDiff)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Adjusted o7 by adding headerSizeDiff: %d\n", headerSizeDiff)
+	}
 
 	if o7 > size {
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Offset o7 (%d) exceeds buffer size (%d)\n", o7, size)
@@ -537,8 +562,8 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Field (8) 'ETH1Data'
-	// ETH1Data starts after 12 offsets (48 bytes)
-	eth1DataStart := offsetsStart + 12*4
+	// ETH1Data starts after 12 offsets (48 bytes) from the actual offsets start position
+	eth1DataStart := actualOffsetsStart + 12*4
 	eth1DataEnd := eth1DataStart + 72
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data range: %d-%d\n", eth1DataStart, eth1DataEnd)
 	if eth1DataEnd > len(buf) {
@@ -557,15 +582,21 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (9) 'ETH1DataVotes'
 	eth1DataVotesOffsetStart := eth1DataEnd
-	o9 = ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
+	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 raw value: %d (0x%x) at position %d\n",
-		o9, o9, eth1DataVotesOffsetStart)
+		o9Raw, o9Raw, eth1DataVotesOffsetStart)
 
-	// Note: Offsets are already correct for the actual header size, no adjustment needed
+	// Adjust offset if SSZ was encoded with legacy header
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o9 = o9Raw + uint64(headerSizeDiff)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Adjusted o9 from %d to %d (added %d)\n", o9Raw, o9, headerSizeDiff)
+	} else {
+		o9 = o9Raw
+	}
 
 	if o9 > size || o7 > o9 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (size: %d, o7: %d)\n",
-			o9, size, o7)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (raw: %d, size: %d, o7: %d)\n",
+			o9, o9Raw, size, o7)
 		return ssz.ErrOffset
 	}
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes): %d\n", o9)
@@ -576,17 +607,27 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (11) 'Validators'
 	validatorsOffsetStart := eth1DepositIndexStart + 8
-	o11 = ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4])
+	o11Raw := ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o11 = o11Raw + uint64(headerSizeDiff)
+	} else {
+		o11 = o11Raw
+	}
 	if o11 > size || o9 > o11 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o11: %d (size: %d, o9: %d)\n", o11, size, o9)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o11: %d (raw: %d, size: %d, o9: %d)\n", o11, o11Raw, size, o9)
 		return ssz.ErrOffset
 	}
 
 	// Offset (12) 'Balances'
 	balancesOffsetStart := validatorsOffsetStart + 4
-	o12 = ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4])
+	o12Raw := ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o12 = o12Raw + uint64(headerSizeDiff)
+	} else {
+		o12 = o12Raw
+	}
 	if o12 > size || o11 > o12 {
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o12: %d (size: %d, o11: %d)\n", o12, size, o11)
+		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o12: %d (raw: %d, size: %d, o11: %d)\n", o12, o12Raw, size, o11)
 		return ssz.ErrOffset
 	}
 
@@ -608,14 +649,24 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (15) 'PreviousEpochParticipation'
 	prevEpochPartOffsetStart := slashingsEnd
-	o15 = ssz.ReadOffset(buf[prevEpochPartOffsetStart : prevEpochPartOffsetStart+4])
+	o15Raw := ssz.ReadOffset(buf[prevEpochPartOffsetStart : prevEpochPartOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o15 = o15Raw + uint64(headerSizeDiff)
+	} else {
+		o15 = o15Raw
+	}
 	if o15 > size || o12 > o15 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (16) 'CurrentEpochParticipation'
 	currEpochPartOffsetStart := prevEpochPartOffsetStart + 4
-	o16 = ssz.ReadOffset(buf[currEpochPartOffsetStart : currEpochPartOffsetStart+4])
+	o16Raw := ssz.ReadOffset(buf[currEpochPartOffsetStart : currEpochPartOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o16 = o16Raw + uint64(headerSizeDiff)
+	} else {
+		o16 = o16Raw
+	}
 	if o16 > size || o15 > o16 {
 		return ssz.ErrOffset
 	}
@@ -656,7 +707,12 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (21) 'InactivityScores'
 	inactivityScoresOffsetStart := finalizedStart + 40
-	o21 = ssz.ReadOffset(buf[inactivityScoresOffsetStart : inactivityScoresOffsetStart+4])
+	o21Raw := ssz.ReadOffset(buf[inactivityScoresOffsetStart : inactivityScoresOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o21 = o21Raw + uint64(headerSizeDiff)
+	} else {
+		o21 = o21Raw
+	}
 	if o21 > size || o16 > o21 {
 		return ssz.ErrOffset
 	}
@@ -683,7 +739,12 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (24) 'LatestExecutionPayloadHeader'
 	latestExecPayloadOffsetStart := nextSyncCommitteeEnd
-	o24 = ssz.ReadOffset(buf[latestExecPayloadOffsetStart : latestExecPayloadOffsetStart+4])
+	o24Raw := ssz.ReadOffset(buf[latestExecPayloadOffsetStart : latestExecPayloadOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o24 = o24Raw + uint64(headerSizeDiff)
+	} else {
+		o24 = o24Raw
+	}
 	if o24 > size || o21 > o24 {
 		return ssz.ErrOffset
 	}
@@ -698,7 +759,12 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (27) 'HistoricalSummaries'
 	historicalSummariesOffsetStart := nextWithdrawalValidatorIndexStart + 8
-	o27 = ssz.ReadOffset(buf[historicalSummariesOffsetStart : historicalSummariesOffsetStart+4])
+	o27Raw := ssz.ReadOffset(buf[historicalSummariesOffsetStart : historicalSummariesOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o27 = o27Raw + uint64(headerSizeDiff)
+	} else {
+		o27 = o27Raw
+	}
 	if o27 > size || o24 > o27 {
 		return ssz.ErrOffset
 	}
@@ -729,21 +795,36 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Offset (34) 'PendingBalanceDeposits'
 	pendingBalanceDepositsOffsetStart := earliestConsolidationEpochStart + 8
-	o34 = ssz.ReadOffset(buf[pendingBalanceDepositsOffsetStart : pendingBalanceDepositsOffsetStart+4])
+	o34Raw := ssz.ReadOffset(buf[pendingBalanceDepositsOffsetStart : pendingBalanceDepositsOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o34 = o34Raw + uint64(headerSizeDiff)
+	} else {
+		o34 = o34Raw
+	}
 	if o34 > size || o27 > o34 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (35) 'PendingPartialWithdrawals'
 	pendingPartialWithdrawalsOffsetStart := pendingBalanceDepositsOffsetStart + 4
-	o35 = ssz.ReadOffset(buf[pendingPartialWithdrawalsOffsetStart : pendingPartialWithdrawalsOffsetStart+4])
+	o35Raw := ssz.ReadOffset(buf[pendingPartialWithdrawalsOffsetStart : pendingPartialWithdrawalsOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o35 = o35Raw + uint64(headerSizeDiff)
+	} else {
+		o35 = o35Raw
+	}
 	if o35 > size || o34 > o35 {
 		return ssz.ErrOffset
 	}
 
 	// Offset (36) 'PendingConsolidations'
 	pendingConsolidationsOffsetStart := pendingPartialWithdrawalsOffsetStart + 4
-	o36 = ssz.ReadOffset(buf[pendingConsolidationsOffsetStart : pendingConsolidationsOffsetStart+4])
+	o36Raw := ssz.ReadOffset(buf[pendingConsolidationsOffsetStart : pendingConsolidationsOffsetStart+4])
+	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
+		o36 = o36Raw + uint64(headerSizeDiff)
+	} else {
+		o36 = o36Raw
+	}
 	if o36 > size || o35 > o36 {
 		return ssz.ErrOffset
 	}
