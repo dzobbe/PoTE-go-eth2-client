@@ -581,36 +581,18 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
-	// The offset should be stored right after ETH1Data (which is 72 bytes)
-	// But we need to check if ETH1Data is at the correct position
-	eth1DataVotesOffsetStart := eth1DataEnd
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d, raw bytes: %x\n",
+	// Offset 9 comes AFTER Field (8) ETH1Data (which is 72 bytes)
+	// So: o7 at actualOffsetsStart+0, then ETH1Data (72 bytes), then o9
+	eth1DataVotesOffsetStart := eth1DataEnd // After ETH1Data
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d (after ETH1Data), raw bytes: %x\n",
 		eth1DataVotesOffsetStart, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
 
-	// Check if we should read from legacy position instead
-	legacyEth1DataStart := legacyOffsetsStart + 12*4
-	legacyEth1DataEnd := legacyEth1DataStart + 72
-	legacyEth1DataVotesOffsetStart := legacyEth1DataEnd
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Legacy o9 would be at position %d, raw bytes: %x\n",
-		legacyEth1DataVotesOffsetStart, buf[legacyEth1DataVotesOffsetStart:legacyEth1DataVotesOffsetStart+4])
-
 	o9Raw := ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
-	o9FromLegacy := ssz.ReadOffset(buf[legacyEth1DataVotesOffsetStart : legacyEth1DataVotesOffsetStart+4])
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 from current pos (%d): %d, from legacy pos (%d): %d\n",
-		eth1DataVotesOffsetStart, o9Raw, legacyEth1DataVotesOffsetStart, o9FromLegacy)
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 raw value: %d (0x%x) at position %d\n",
+		o9Raw, o9Raw, eth1DataVotesOffsetStart)
 
-	// Determine which offset to use
-	if headerSizeDiff > 0 && o9FromLegacy < size && o9FromLegacy > o7 && (o9Raw > size || o9Raw < o7) {
-		// Use legacy position
-		o9Raw = o9FromLegacy
-		eth1DataVotesOffsetStart = legacyEth1DataVotesOffsetStart
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Using legacy offset position for o9\n")
-		// Adjust offset value for extended header
-		o9 = o9Raw + uint64(headerSizeDiff)
-		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Adjusted o9 from %d to %d (added %d)\n", o9Raw, o9, headerSizeDiff)
-	} else {
-		o9 = o9Raw
-	}
+	// Offsets are already correct for the actual header size, no adjustment needed
+	o9 = o9Raw
 
 	if o9 > size || o7 > o9 {
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o9: %d (raw: %d, size: %d, o7: %d)\n",
@@ -620,30 +602,25 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes): %d\n", o9)
 
 	// Field (10) 'ETH1DepositIndex'
+	// ETH1DepositIndex comes after offset 9
 	eth1DepositIndexStart := eth1DataVotesOffsetStart + 4
 	b.ETH1DepositIndex = ssz.UnmarshallUint64(buf[eth1DepositIndexStart : eth1DepositIndexStart+8])
 
 	// Offset (11) 'Validators'
+	// Offset 11 comes AFTER Field (10) ETH1DepositIndex (which is 8 bytes)
 	validatorsOffsetStart := eth1DepositIndexStart + 8
 	o11Raw := ssz.ReadOffset(buf[validatorsOffsetStart : validatorsOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o11 = o11Raw + uint64(headerSizeDiff)
-	} else {
-		o11 = o11Raw
-	}
+	o11 = o11Raw
 	if o11 > size || o9 > o11 {
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o11: %d (raw: %d, size: %d, o9: %d)\n", o11, o11Raw, size, o9)
 		return ssz.ErrOffset
 	}
 
 	// Offset (12) 'Balances'
+	// Offset 12 comes right after offset 11
 	balancesOffsetStart := validatorsOffsetStart + 4
 	o12Raw := ssz.ReadOffset(buf[balancesOffsetStart : balancesOffsetStart+4])
-	if actualOffsetsStart == legacyOffsetsStart && headerSizeDiff > 0 {
-		o12 = o12Raw + uint64(headerSizeDiff)
-	} else {
-		o12 = o12Raw
-	}
+	o12 = o12Raw
 	if o12 > size || o11 > o12 {
 		fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ERROR - Invalid offset o12: %d (raw: %d, size: %d, o11: %d)\n", o12, o12Raw, size, o11)
 		return ssz.ErrOffset
