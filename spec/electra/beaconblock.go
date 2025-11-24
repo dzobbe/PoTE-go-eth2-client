@@ -22,11 +22,13 @@ import (
 
 // BeaconBlock represents a beacon block.
 type BeaconBlock struct {
-	Slot          phase0.Slot
-	ProposerIndex phase0.ValidatorIndex
-	ParentRoot    phase0.Root `ssz-size:"32"`
-	StateRoot     phase0.Root `ssz-size:"32"`
-	Body          *BeaconBlockBody
+	Slot             phase0.Slot
+	ProposerIndex    phase0.ValidatorIndex
+	ParentRoot       phase0.Root `ssz-size:"32"`
+	StateRoot        phase0.Root `ssz-size:"32"`
+	ProposerTEEType  uint8
+	ProposerTEEQuote [phase0.ProposerTEEQuoteLength]byte `ssz-size:"8192"`
+	Body             *BeaconBlockBody
 }
 
 // String returns a string version of the structure.

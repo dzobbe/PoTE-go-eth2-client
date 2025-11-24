@@ -16,7 +16,8 @@ func (b *BeaconBlock) MarshalSSZ() ([]byte, error) {
 // MarshalSSZTo ssz marshals the BeaconBlock object to a target array
 func (b *BeaconBlock) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	dst = buf
-	offset := int(84)
+	// Fixed portion: slot(8) + proposer_index(8) + parent_root(32) + state_root(32) + proposer_tee_type(1) + proposer_tee_quote(8192) + offset(4) = 8277
+	offset := int(8277)
 
 	// Field (0) 'Slot'
 	dst = ssz.MarshalUint64(dst, uint64(b.Slot))
@@ -30,14 +31,20 @@ func (b *BeaconBlock) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 	// Field (3) 'StateRoot'
 	dst = append(dst, b.StateRoot[:]...)
 
-	// Offset (4) 'Body'
+	// Field (4) 'ProposerTEEType'
+	dst = append(dst, byte(b.ProposerTEEType))
+
+	// Field (5) 'ProposerTEEQuote'
+	dst = append(dst, b.ProposerTEEQuote[:]...)
+
+	// Offset (6) 'Body'
 	dst = ssz.WriteOffset(dst, offset)
 	if b.Body == nil {
 		b.Body = new(BeaconBlockBody)
 	}
 	offset += b.Body.SizeSSZ()
 
-	// Field (4) 'Body'
+	// Field (6) 'Body'
 	if dst, err = b.Body.MarshalSSZTo(dst); err != nil {
 		return
 	}
@@ -49,12 +56,14 @@ func (b *BeaconBlock) MarshalSSZTo(buf []byte) (dst []byte, err error) {
 func (b *BeaconBlock) UnmarshalSSZ(buf []byte) error {
 	var err error
 	size := uint64(len(buf))
-	if size < 84 {
+	// Minimum size: slot(8) + proposer_index(8) + parent_root(32) + state_root(32) + proposer_tee_type(1) + proposer_tee_quote(8192) + offset(4) = 8277
+	const minSize = 8277
+	if size < minSize {
 		return ssz.ErrSize
 	}
 
 	tail := buf
-	var o4 uint64
+	var o6 uint64
 
 	// Field (0) 'Slot'
 	b.Slot = phase0.Slot(ssz.UnmarshallUint64(buf[0:8]))
@@ -68,18 +77,24 @@ func (b *BeaconBlock) UnmarshalSSZ(buf []byte) error {
 	// Field (3) 'StateRoot'
 	copy(b.StateRoot[:], buf[48:80])
 
-	// Offset (4) 'Body'
-	if o4 = ssz.ReadOffset(buf[80:84]); o4 > size {
+	// Field (4) 'ProposerTEEType'
+	b.ProposerTEEType = uint8(buf[80])
+
+	// Field (5) 'ProposerTEEQuote'
+	copy(b.ProposerTEEQuote[:], buf[81:81+phase0.ProposerTEEQuoteLength])
+
+	// Offset (6) 'Body' - at position 81 + 8192 = 8273
+	if o6 = ssz.ReadOffset(buf[8273:8277]); o6 > size {
 		return ssz.ErrOffset
 	}
 
-	if o4 < 84 {
+	if o6 < minSize {
 		return ssz.ErrInvalidVariableOffset
 	}
 
-	// Field (4) 'Body'
+	// Field (6) 'Body'
 	{
-		buf = tail[o4:]
+		buf = tail[o6:]
 		if b.Body == nil {
 			b.Body = new(BeaconBlockBody)
 		}
@@ -92,9 +107,10 @@ func (b *BeaconBlock) UnmarshalSSZ(buf []byte) error {
 
 // SizeSSZ returns the ssz encoded size in bytes for the BeaconBlock object
 func (b *BeaconBlock) SizeSSZ() (size int) {
-	size = 84
+	// Fixed portion: slot(8) + proposer_index(8) + parent_root(32) + state_root(32) + proposer_tee_type(1) + proposer_tee_quote(8192) + offset(4) = 8277
+	size = 8277
 
-	// Field (4) 'Body'
+	// Field (6) 'Body'
 	if b.Body == nil {
 		b.Body = new(BeaconBlockBody)
 	}
@@ -124,7 +140,13 @@ func (b *BeaconBlock) HashTreeRootWith(hh ssz.HashWalker) (err error) {
 	// Field (3) 'StateRoot'
 	hh.PutBytes(b.StateRoot[:])
 
-	// Field (4) 'Body'
+	// Field (4) 'ProposerTEEType'
+	hh.PutUint64(uint64(b.ProposerTEEType))
+
+	// Field (5) 'ProposerTEEQuote'
+	hh.PutBytes(b.ProposerTEEQuote[:])
+
+	// Field (6) 'Body'
 	if err = b.Body.HashTreeRootWith(hh); err != nil {
 		return
 	}
