@@ -534,8 +534,8 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	}
 
 	// Field (8) 'ETH1Data'
-	// According to marshal: after all 12 offsets (48 bytes), then ETH1Data
-	eth1DataStart := offsetsStart + 12*4
+	// According to marshal: after o7 (4 bytes), then ETH1Data (72 bytes)
+	eth1DataStart := offsetsStart + 4 // After o7
 	eth1DataEnd := eth1DataStart + 72
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data range: %d-%d\n", eth1DataStart, eth1DataEnd)
 	if eth1DataEnd > len(buf) {
@@ -553,21 +553,11 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: ETH1Data unmarshaled successfully\n")
 
 	// Offset (9) 'ETH1DataVotes'
-	// According to marshal code: after ETH1Data, then offset (9)
-	// But wait - marshal shows offsets are written interleaved with fields
-	// However, SSZ spec says all offsets come first, then fixed fields
-	// Let me check: marshal writes o7, then ETH1Data, then o9
-	// This suggests offsets are NOT all together, but interleaved
-
-	// Actually, looking at the marshal code structure more carefully:
-	// The marshal code writes: o7, ETH1Data, o9, ETH1DepositIndex, o11, o12, RANDAOMixes, Slashings, o15, o16, ...
-	// This is interleaved! But SSZ typically stores offsets together.
-
-	// Let me try: offsets are stored together first (12 offsets = 48 bytes), then fields
-	// o7 at offsetsStart+0, o9 at offsetsStart+8*4 (since o7=0, o8 doesn't exist, o9=8)
-	eth1DataVotesOffsetStart := offsetsStart + 8*4 // Offset 9 is the 9th offset (index 8, 0-indexed from o7)
-	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from offsets section position %d, raw bytes: %x\n",
-		eth1DataVotesOffsetStart, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
+	// According to marshal code: o7 (4 bytes), ETH1Data (72 bytes), then o9 (4 bytes)
+	// So o9 is at: offsetsStart + 4 (o7) + 72 (ETH1Data) = offsetsStart + 76
+	eth1DataVotesOffsetStart := offsetsStart + 4 + 72 // After o7 and ETH1Data
+	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Reading o9 from position %d (after o7 at %d and ETH1Data at %d-%d), raw bytes: %x\n",
+		eth1DataVotesOffsetStart, offsetsStart, eth1DataStart, eth1DataEnd, buf[eth1DataVotesOffsetStart:eth1DataVotesOffsetStart+4])
 
 	o9 = ssz.ReadOffset(buf[eth1DataVotesOffsetStart : eth1DataVotesOffsetStart+4])
 	fmt.Printf("[DEBUG] BeaconState.UnmarshalSSZ: Offset o9 (ETH1DataVotes) at position %d: %d (0x%x)\n",
@@ -582,8 +572,7 @@ func (b *BeaconState) UnmarshalSSZ(buf []byte) error {
 
 	// Field (10) 'ETH1DepositIndex'
 	// According to marshal: after offset (9), then ETH1DepositIndex
-	// But if offsets are all together, then ETH1DepositIndex comes after all offsets + ETH1Data
-	eth1DepositIndexStart := eth1DataEnd // After ETH1Data (which is after all offsets)
+	eth1DepositIndexStart := eth1DataVotesOffsetStart + 4 // After o9
 	b.ETH1DepositIndex = ssz.UnmarshallUint64(buf[eth1DepositIndexStart : eth1DepositIndexStart+8])
 
 	// Offset (11) 'Validators'
